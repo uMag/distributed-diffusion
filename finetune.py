@@ -151,12 +151,16 @@ class LocalBase(torch.utils.data.Dataset):
         self.examples = {}
         self.hashes = []
         for i in self.image_files:
+            print(i)
+            print(data_root)
             hash = i[len(f'{data_root}/'):].split('.')[0]
+            print(hash)
             self.examples[hash] = {
                 'image': i,
                 'text': f'{data_root}/{hash}.txt'
             }
             self.hashes.append(hash)
+            print(self.hashes)
         print(3)
         self.size = size
         self.interpolation = {"bilinear": PIL.Image.Resampling.BILINEAR,
