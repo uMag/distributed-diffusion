@@ -6,8 +6,14 @@ This project is in alpha and is under testing
 
 ## Requirements
 
-- 22GB of VRAM
+8 Bit Adam:
+- 17.4GB of VRAM
+- 12.5GB of RAM
+
+8 Bit Adam and FP16:
+- 19GB of VRAM
 - 8GB of RAM
+
 - A good and stable internet connection
 - Python 3
 - Linux or WSL (due to UVLOOP)
