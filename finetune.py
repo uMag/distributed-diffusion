@@ -194,6 +194,7 @@ class LocalBase(torch.utils.data.Dataset):
                 image_pil = Image.open(f).convert('RGB')
                 image['pixel_values'] = self.transforms(image_pil)
             text_file = self.examples[self.hashes[i]]['text']
+            print(str(text_file))
             print("7")
             with open(text_file, 'rb') as f:
                 text = f.read().decode('utf-8')
