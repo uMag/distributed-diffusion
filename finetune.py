@@ -143,24 +143,18 @@ class LocalBase(torch.utils.data.Dataset):
 
         self.shuffle=shuffle
         self.resize=resize
-        print("1")
         ext = ['png', 'jpg', 'jpeg', 'bmp', 'webp']
         self.image_files = []
         [self.image_files.extend(glob.glob(f'{data_root}/' + '*.' + e)) for e in ext]
-        print("2")
         self.examples = {}
         self.hashes = []
         for i in self.image_files:
-            print(i)
-            print(data_root)
             hash = i[len(f'{data_root}/'):].split('.')[0]
-            print(hash)
             self.examples[hash] = {
                 'image': i,
                 'text': f'{data_root}/{hash}.txt'
             }
             self.hashes.append(hash)
-        print(3)
         self.size = size
         self.interpolation = {"bilinear": PIL.Image.Resampling.BILINEAR,
                               "bicubic": PIL.Image.Resampling.BICUBIC,
@@ -179,7 +173,6 @@ class LocalBase(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
 
     def get_caption(self, i):
-        print("5")
         example = self.examples[self.hashes[i]]
         caption = open(example['text'], 'r').read()
         caption = caption.replace('  ', ' ').replace('\n', ' ').lstrip().rstrip()
@@ -190,15 +183,12 @@ class LocalBase(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         image = {} # pixel values, input ids
-        print("6")
         try:
             image_file = self.examples[self.hashes[i]]['image']
             with open(image_file, 'rb') as f:
                 image_pil = Image.open(f).convert('RGB')
                 image['pixel_values'] = self.transforms(image_pil)
             text_file = self.examples[self.hashes[i]]['text']
-            print(str(text_file))
-            print("7")
             with open(text_file, 'rb') as f:
                 text = f.read().decode('utf-8')
                 text = text.replace('  ', ' ').replace('\n', ' ').lstrip().rstrip()
@@ -206,7 +196,6 @@ class LocalBase(torch.utils.data.Dataset):
         except Exception as e:
             print(f'Error with {self.examples[self.hashes[i]]["image"]} -- {e} -- skipping {i}')
             return None
-        print("8")
         if random.random() < self.ucg:
             image['caption'] = ''
 
@@ -447,13 +436,8 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             # Convert images to latent space
-            try:
-                latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
-                latents = latents * 0.18215
-            except Exception as e:
-                print("Failed converting images to latent space! Skipping...")
-                print(str(e))
-                continue
+            latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
+            latents = latents * 0.18215
 
             # Sample noise
             noise = torch.randn_like(latents)
