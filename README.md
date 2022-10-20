@@ -54,6 +54,28 @@ The following is a list of what we plan to do next:
 - Live global progress site
 - Aproximation to achieve same compute as 8 A100s
 
+## Statistics
+Experiments ran on A100-80GB-XM4
+ETA is for 75K Images/10 Epochs/750K Itterations.
+Loaded via directories
+
+8 Bit Adam only, Batch size 1, lr 5e-6:
+- It/s: Min. 2.60; Max. 3.20; Avg. 3.05
+- ETA: Around 70 Hours
+- 17.4GB of VRAM
+- 12.5GB of RAM
+
+8 Bit Adam only, Batch size 4, lr 5e-6:
+- It/s: Min. 1.02; Max. 1.26; Avg. 1.15
+- ETA: Around 47 Hours
+- 37GB of VRAM
+- 11.2GB of RAM
+
+8 Bit Adam only, Batch size 8, lr 5e-6:
+- s/it: Min. 1.39; Max. 2.16; Avg. 1.40
+- ETA: Around 40 Hours
+- 63GB of VRAM
+- 11.2GB of RAM
 
 ## Credits:
 - Haru: Wrote the first trainer and rewrote it from scratch optimizing it
