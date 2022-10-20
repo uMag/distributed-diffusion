@@ -15,11 +15,13 @@ for path in pathlist:
         filename = os.path.splitext(path)[0]
         x = os.path.isfile(str(filename) + ".jpg") or os.path.isfile(str(filename) + ".png") or os.path.isfile(str(filename) + ".jpeg")
         if x is False:
+            print("deleting ") + str(path)
             os.remove(path)
     elif extension in image_formats:
         filename = os.path.splitext(path)[0]
         x = os.path.isfile(str(filename) + ".txt")
         if x is False:
+            print("deleting ") + str(path)
             os.remove(path)
     
 index = 1
