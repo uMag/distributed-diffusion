@@ -48,6 +48,7 @@ In short terms, this is what the network does:
 ## Future Aims/Contributions
 The following is a list of what we plan to do next:
 - Test FP16 and shrink VRAM usage even lower
+- Offload to NVMe with zero-infinity? https://github.com/huggingface/transformers/issues/11464
 - Syncronize dataset automatically
 - Test aronund dataset progress and its effects on loss
 - Compress even further the syncronization
