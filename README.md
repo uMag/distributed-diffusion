@@ -21,6 +21,8 @@ This project is in alpha and is under testing
 
 ## How to use
 
+### A step-by-step guide is available here: https://rentry.org/informal-training-guide
+
 There is a long list of flags you can set on the script, but the most important ones are the following:
 
 - --model : Set the path to model, must be in diffusers form
@@ -31,7 +33,7 @@ There is a long list of flags you can set on the script, but the most important 
 ## How to join
 We are going to start a collaborative training run around november.
 
-If you want to get notified, join this server: [soon]
+If you want to get notified, join this server: https://discord.gg/xVsyrmhQWS
 
 And grab the "relay" role.
 
