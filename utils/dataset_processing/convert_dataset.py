@@ -1,21 +1,11 @@
 #Preprocess dataset and save to parquet files for upload to HF
 import argparse
-import socket
 import torch
 import torchvision
-import transformers
-import diffusers
-import os
-import io
-import PIL
 import glob
 import random
 import tqdm
-import resource
-import psutil
 import pynvml
-import wandb
-import gc
 import itertools
 import numpy as np
 
@@ -24,11 +14,8 @@ try:
 except pynvml.nvml.NVMLError_LibraryNotFound:
     pynvml = None
 
-from typing import Iterable
-from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, PNDMScheduler, StableDiffusionPipeline
-from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
-from diffusers.optimization import get_scheduler
-from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
+from diffusers import AutoencoderKL, UNet2DConditionModel
+from transformers import CLIPTextModel, CLIPTokenizer
 from PIL import Image
 from typing import Dict, List, Generator, Tuple
 from scipy.interpolate import interp1d
@@ -342,4 +329,32 @@ train_dataloader = torch.utils.data.DataLoader(
 
 print(type(train_dataloader))
 
+weight_dtype = torch.float32
+
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
+
+text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token)
+vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token)
+unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token)
+
+# move models to device
+vae = vae.to(device, dtype=weight_dtype)
+unet = unet.to(device, dtype=torch.float32)
+text_encoder = text_encoder.to(device, dtype=weight_dtype)
+
+count = 0
+
+for step, batch in enumerate(train_dataloader):
+    count = count + 1
+    print("Restart...")
+    latents = None
+    # Convert images to latent space
+    print("LATENT")
+    latents = batch['pixel_values']
+    print("TEXT")
+    text = batch["input_ids"]
+
+    print("counter: " + str(count))
 # dataset = AspectDataset(store, tokenizer)
