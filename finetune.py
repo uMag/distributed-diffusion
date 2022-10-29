@@ -16,7 +16,6 @@ import resource
 import psutil
 import pynvml
 import sys
-import hivemind
 
 try:
     pynvml.nvmlInit()
@@ -36,6 +35,8 @@ parser = argparse.ArgumentParser(description='Stable Diffusion Finetuner')
 parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--run_name', type=str, default=None, required=True, help='Name of the finetune run.')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
+parser.add_argument('--hivemind', dest='hivemind', default=None, help='Enable hivemind distributed training (ALPHA).')
+parser.add_argument('--hfstream', dest='hfstream', default=None, help='Stream dataset from HuggingFace.')
 parser.add_argument('--lr', type=float, default=5e-6, help='Learning rate')
 parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train for')
 parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
@@ -314,51 +315,63 @@ def main():
         weight_decay=args.adam_weight_decay,
     )
 
-    if args.peers:
-        print("You have specified one or more peers. Adding them to initial peers and creating a relay session.")
-        init_peers = args.peers
-        dht = hivemind.DHT(
-            host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
-            initial_peers=init_peers, 
-            start=True)
-        
-        print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
-        print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
-        print("Important Note: This is a RELAY of the existing session. You can share this peer adress to peers close to you!")
+    #TODO: turn this into a function
+    if args.hivemind:
+        import hivemind
+        if args.peers:
+            print("You have specified one or more peers. Adding them to initial peers and creating a relay session.")
+            init_peers = args.peers
+            dht = hivemind.DHT(
+                host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
+                initial_peers=init_peers, 
+                start=True)
+            
+            print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
+            print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
+            print("Important Note: This is a RELAY of the existing session. You can share this peer adress to peers close to you!")
 
-        hm_opt = hivemind.Optimizer(
-            dht=dht,                  # use a DHT that is connected with other peers
-            run_id='test_run',    # unique identifier of this collaborative run
-            batch_size_per_step=32,   # each call to opt.step adds this many samples towards the next epoch
-            target_batch_size=10000,  # after peers collectively process this many samples, average weights and begin the next epoch 
-            optimizer=optimizer,            # wrap the SGD optimizer defined above
-            use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
-            matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
-            averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
-            verbose=True              # print logs incessently
-        )
+            hm_opt = hivemind.Optimizer(
+                dht=dht,                  # use a DHT that is connected with other peers
+                run_id='test_run',    # unique identifier of this collaborative run
+                batch_size_per_step=32,   # each call to opt.step adds this many samples towards the next epoch
+                target_batch_size=10000,  # after peers collectively process this many samples, average weights and begin the next epoch 
+                optimizer=optimizer,            # wrap the SGD optimizer defined above
+                use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
+                matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
+                averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
+                verbose=True              # print logs incessently
+            )
+
+        else:
+            print("You haven't specified any existing peers! Creating a new session.")
+            dht = hivemind.DHT(
+                host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
+                start=True)
+            
+            print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
+            print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
+            print("Important Note: This is a NEW training session.")
+
+            hm_opt = hivemind.Optimizer(
+                dht=dht,                  # use a DHT that is connected with other peers
+                run_id='test_run',    # unique identifier of this collaborative run
+                batch_size_per_step=32,   # each call to opt.step adds this many samples towards the next epoch
+                target_batch_size=10000,  # after peers collectively process this many samples, average weights and begin the next epoch 
+                optimizer=optimizer,            # wrap the SGD optimizer defined above
+                use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
+                matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
+                averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
+                verbose=True              # print logs incessently
+            )
+        final_opt = hm_opt
 
     else:
-        print("You haven't specified any existing peers! Creating a new session.")
-        dht = hivemind.DHT(
-            host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
-            start=True)
-        
-        print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
-        print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
-        print("Important Note: This is a NEW training session.")
-
-        hm_opt = hivemind.Optimizer(
-            dht=dht,                  # use a DHT that is connected with other peers
-            run_id='test_run',    # unique identifier of this collaborative run
-            batch_size_per_step=32,   # each call to opt.step adds this many samples towards the next epoch
-            target_batch_size=10000,  # after peers collectively process this many samples, average weights and begin the next epoch 
-            optimizer=optimizer,            # wrap the SGD optimizer defined above
-            use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
-            matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
-            averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
-            verbose=True              # print logs incessently
+        #TODO: lr_scheduler does not work with hivemind for some reason
+        lr_scheduler = get_scheduler(
+            'constant',
+            optimizer=optimizer
         )
+        final_opt = optimizer
 
     noise_scheduler = DDPMScheduler(
         beta_start=0.00085,
@@ -381,15 +394,25 @@ def main():
             'attention_mask': padded_tokens.attention_mask,
         }
 
-    train_dataset = LocalBase(
-        args.dataset,
-        args.resolution,
-        args.ucg,
-        args.resize_interp,
-        args.resize,
-        args.shuffle,
-        tokenizer
-    )
+    if args.hfstream:
+        # Stream dataset from huggingface: https://huggingface.co/docs/datasets/stream
+        from datasets import load_dataset
+        train_dataset = load_dataset(
+            args.dataset,
+            streaming=True,
+            split="train"
+        ).with_format("torch")
+    else:
+        # The old way (local and via directories)
+        train_dataset = LocalBase(
+            args.dataset,
+            args.resolution,
+            args.ucg,
+            args.resize_interp,
+            args.resize,
+            args.shuffle,
+            tokenizer
+        )
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -460,10 +483,13 @@ def main():
 
             # Backprop
             scaler.scale(loss).backward()
-            scaler.step(hm_opt)
+            scaler.step(final_opt)
             scaler.update()
-            hm_opt.step()
-            hm_opt.zero_grad()
+            if args.hivemind:
+                final_opt.step()
+            else:
+                lr_scheduler.step()
+            final_opt.zero_grad()
 
             # Update EMA
             if args.use_ema:
@@ -471,11 +497,17 @@ def main():
             
             progress_bar.update(1)
             global_step += 1
-            logs = {
-                "loss": loss.detach().item(),
-                #"lr": lr_scheduler.get_last_lr()[0],
-                "epoch": epoch
-            }
+            if args.hivemind:
+                logs = {
+                    "loss": loss.detach().item(),
+                    "epoch": epoch
+                }
+            else:
+                logs = {
+                    "loss": loss.detach().item(),
+                    "lr": lr_scheduler.get_last_lr()[0],
+                    "epoch": epoch
+                }
             progress_bar.set_postfix(logs)
 
             if global_step % args.save_steps == 0:
