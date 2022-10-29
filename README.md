@@ -10,7 +10,7 @@ This project is in alpha and is under testing
 - 17.4GB of VRAM
 - 12.5GB of RAM
 
-8 Bit Adam and FP16:
+8 Bit Adam and FP16 (BROKEN):
 - 19GB of VRAM
 - 8GB of RAM
 
@@ -21,14 +21,78 @@ This project is in alpha and is under testing
 
 ## How to use
 
+Ex.: 
+```
+python3 finetune.py --dataset ./directory_of_my_dataset --model ./diffuser_folder_of_base_model --run_name my_finetuned_model
+```
+
 ### A step-by-step guide is available here: https://rentry.org/informal-training-guide
 
 There is a long list of flags you can set on the script, but the most important ones are the following:
 
+Required flags:
 - --model : Set the path to model, must be in diffusers form
 - --run_name : Name for the training run, does not interfere with Hivemind
 - --dataset : Set the path to the dataset, images and text files must be in the same folder
+
+Optional Flags:
+- --lr : Set the Lreaning rate, float type, default is 5e-6.
+- --epochs: Set the number of epochs ([Definition](https://deepai.org/machine-learning-glossary-and-terms/epoch)) to train for, integer type, deafult is 10.
+- --batch_size : Batch size to use. Fills more VRAM but trains faster. integer type, default is 1.
+- --center_crop : Crop Images during training to it's center. Default is True, if disabled it might break if it gets a 512x512+ image.
+- --fp16 : BROKEN. Train in mixed precision, accelerating the process. Default is False, and according to some users it is currently broken since loss gets to NaN in the long run.
+
+Hivemind Specific:
 - --peers : Set the peers to connect to, separated by space bar and as a list. If None then a new session will be started. Ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2
+- --hivemind: Enable hivemind distributed training (ALPHA)
+- --hfstream : Stream dataset from HuggingFace.
+
+More flags: https://github.com/chavinlo/distributed-diffusion/blob/main/finetune.py#L34
+
+## Dataset format
+At the moment there are two forms of loading a dataset:
+### Directory based:
+Put all the images and texts into one directory. Should look like the following:
+
+![image](https://user-images.githubusercontent.com/85657083/198753014-bb8947d4-618a-4f85-a480-197c141a6fbf.png)
+
+Accepted image extensions: PNG, JPG, JPEG, BMP, WEBP
+
+As you can see, both the images and text files must be in the same folder, and have the same name to link each other.
+The Image file must contain the image itself, and the text file must contain the text to correlate to. These two must have the same filename to identify and match them.
+
+For example:
+Image file: 5701024.jpg
+
+Contents:
+
+<img src="https://user-images.githubusercontent.com/85657083/198753223-dcd059c1-6e20-4028-9fe0-387cc4890449.png" width="360" height="360" />
+
+Source: @Peargor on Twitter, https://twitter.com/Peargor/status/1574190864267608071
+
+Text file: 5701024.txt
+
+Contents:
+
+```
+1koma, 2girls, black eyes, brown hair, chair, comic, computer, curtains, english text, feet out of frame, indoors, laptop, looking at another, multiple girls, office chair, open mouth, red skirt, school uniform, shirt, short hair, short twintails, sitting, skirt, smile, table, thighhighs, tokisadame school uniform, twintails, white thighhighs, yellow shirt, aioi yuuko, naganohara mio, absurdres, commentary, highres, peargor, nichijou
+```
+
+Once you have your dataset directory ready, add the "--dataset" flag to your command, followed by a space and the path to your directory.
+
+Ex.: 
+```
+python3 finetune.py --dataset ./directory_of_my_dataset --model ./sd-diffuser --run_name my_finetuned_model
+```
+
+### HuggingFace Dataset Streaming (Recommended with hivemind):
+Note: I haven't tested this yet so it might not work
+
+This method consists on using HuggingFace's Dataset module to stream the data from their site eliminating the requirement to download the entire dataset. This can be useful specially when using Hivemind in order to distribute the data evenly, as seen on Hivemind's Training-Transformers-Together experiment: https://training-transformers-together.github.io/#memory-efficiency
+
+For more information please check HuggingFace's docs:
+https://huggingface.co/docs/datasets/how_to
+
 
 ## How to join
 We are going to start a collaborative training run around november.
