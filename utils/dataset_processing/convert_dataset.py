@@ -66,6 +66,12 @@ args = parser.parse_args()
 
 # store = ImageStore(args.dataset)
 
+def _sort_by_ratio(bucket: tuple) -> float:
+    return bucket[0] / bucket[1]
+
+def _sort_by_area(bucket: tuple) -> float:
+    return bucket[0] * bucket[1]
+
 class ImageStore:
     def __init__(self, data_dir: str) -> None:
         self.data_dir = data_dir
