@@ -23,23 +23,3 @@ for path in pathlist:
         if x is False:
             print("deleting " + str(path))
             os.remove(path)
-    
-index = 1
-pathlist = Path(args.dataset).rglob('*.txt')
-for path in pathlist:
-    filename = os.path.splitext(path)[0]
-    txt_new = str(index) + ".txt"
-    os.rename(path, Path(args.dataset, txt_new))
-    if os.path.isfile(str(filename) + ".jpg"):
-        img_old = str(filename) + ".jpg"
-        img_new = str(index) + ".jpg"
-        os.rename(img_old, Path(args.dataset, img_new))
-    elif os.path.isfile(str(filename) + ".png"):
-        img_old = str(filename) + ".png"
-        img_new = str(index) + ".png"
-        os.rename(img_old, Path(args.dataset, img_new))
-    elif os.path.isfile(str(filename) + ".jpeg"):
-        img_old = str(filename) + ".jpeg"
-        img_new = str(index) + ".jpeg"
-        os.rename(img_old, Path(args.dataset, img_new))
-    index = index + 1
