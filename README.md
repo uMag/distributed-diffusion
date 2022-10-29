@@ -10,7 +10,7 @@ This project is in alpha and is under testing
 - 17.4GB of VRAM
 - 12.5GB of RAM
 
-8 Bit Adam and FP16:
+8 Bit Adam and FP16 (BROKEN):
 - 19GB of VRAM
 - 8GB of RAM
 
@@ -21,13 +21,21 @@ This project is in alpha and is under testing
 
 ## How to use
 
+Ex.: 
+```
+python3 finetune.py --dataset ./directory_of_my_dataset --model ./diffuser_folder_of_base_model --run_name my_finetuned_model
+```
+
 ### A step-by-step guide is available here: https://rentry.org/informal-training-guide
 
 There is a long list of flags you can set on the script, but the most important ones are the following:
 
+Required flags:
 - --model : Set the path to model, must be in diffusers form
 - --run_name : Name for the training run, does not interfere with Hivemind
 - --dataset : Set the path to the dataset, images and text files must be in the same folder
+
+Optional Flags:
 - --lr : Set the Lreaning rate, float type, default is 5e-6.
 - --epochs: Set the number of epochs ([Definition](https://deepai.org/machine-learning-glossary-and-terms/epoch)) to train for, integer type, deafult is 10.
 - --batch_size : Batch size to use. Fills more VRAM but trains faster. integer type, default is 1.
@@ -69,6 +77,14 @@ Contents:
 ```
 1koma, 2girls, black eyes, brown hair, chair, comic, computer, curtains, english text, feet out of frame, indoors, laptop, looking at another, multiple girls, office chair, open mouth, red skirt, school uniform, shirt, short hair, short twintails, sitting, skirt, smile, table, thighhighs, tokisadame school uniform, twintails, white thighhighs, yellow shirt, aioi yuuko, naganohara mio, absurdres, commentary, highres, peargor, nichijou
 ```
+
+Once you have your dataset directory ready, add the "--dataset" flag to your command, followed by a space and the path to your directory.
+
+Ex.: 
+```
+python3 finetune.py --dataset ./directory_of_my_dataset --model ./sd-diffuser --run_name my_finetuned_model
+```
+
 ### HuggingFace Dataset Streaming (Recommended with hivemind):
 Note: I haven't tested this yet so it might not work
 
