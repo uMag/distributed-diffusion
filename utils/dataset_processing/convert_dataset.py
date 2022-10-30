@@ -8,6 +8,7 @@ import tqdm
 import pynvml
 import itertools
 import numpy as np
+from tensorizer.protobuf import serialize_tensor
 
 try:
     pynvml.nvmlInit()
@@ -335,12 +336,16 @@ with tqdm.tqdm(total=total_number, desc="Preprocessing data") as pbar:
         latents = None
         # Convert images to latent space
         latents = batch['pixel_values']
+        serialized_latents = serialize_tensor(latents)
         text = batch["input_ids"]
+        serialized_text = serialize_tensor(text)
+        attention_mask_tensor = batch['attention_mask']
+        serialized_attention_mask = serialize_tensor(attention_mask_tensor)
 
         img_no.insert(step, step)
-        input_ids.insert(step, batch["input_ids"])
-        attention_mask.insert(step, batch['attention_mask'])
-        pixel_values.insert(step, batch['pixel_values'])
+        input_ids.insert(step, serialized_text)
+        attention_mask.insert(step, serialized_attention_mask)
+        pixel_values.insert(step, serialized_latents)
         pbar.update(1)
         counter = counter + 1
 
