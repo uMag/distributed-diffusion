@@ -1,4 +1,3 @@
-#Preprocess dataset and save to parquet files for upload to HF
 import argparse
 import torch
 import torchvision
@@ -20,8 +19,6 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from PIL import Image
 from typing import Dict, List, Generator, Tuple
 from scipy.interpolate import interp1d
-print("Notice: In order to upload the parquet files to HuggingFace's Hub, you need to set your token. You can set it by running 'huggingface-cli login'")
-print("Note that this is just for testing, 500ish images consume 50GB of RAM.")
 parser = argparse.ArgumentParser(description="Pre-Process dataset")
 parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for pre-processing. Could be HuggingFace ID or a directory')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for pre-processing')

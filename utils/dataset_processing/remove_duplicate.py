@@ -2,7 +2,7 @@ import argparse
 import os
 from pathlib import Path
 
-parser = argparse.ArgumentParser(description='Dataset Curator')
+parser = argparse.ArgumentParser(description='Remove duplicate images')
 parser.add_argument('--dataset', type=str, default=None, help='Path to dataset')
 args = parser.parse_args()
 
