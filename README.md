@@ -97,7 +97,7 @@ https://huggingface.co/docs/datasets/how_to
 ## How to join
 We are going to start a collaborative training run around november.
 
-If you want to get notified, join this server: https://discord.gg/xVsyrmhQWS
+If you want to get notified, join this server: https://discord.gg/8Sh2T6gjd2
 
 And grab the "relay" role.
 
