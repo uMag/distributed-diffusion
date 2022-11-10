@@ -1,19 +1,25 @@
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, Response
 from pathlib import Path
 from zipfile import ZipFile
 import os
 import argparse
 import time
 from io import BytesIO
+from datetime import datetime
 
 parser = argparse.ArgumentParser(description='Dataset server')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='Path to dataset')
 parser.add_argument('--new', type=bool, default=False, help='re-scan the dataset folder')
 parser.add_argument('--load', type=str, default=None, help='path to the JSON DB snapshot')
+parser.add_argument('--name', type=str, default=None, required=True, help='Server name')
+parser.add_argument('--description', type=str, default=None, required=True, help='Server description')
 args = parser.parse_args()
 
-#in minutes
-timeToTaskComplete = 5.0
+#info
+version = "0.1a"
+execDate = str(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+print("Server Version: " + version)
+print("Current Time: " + execDate)
 
 #gt/GetTime
 def gt():
@@ -42,23 +48,36 @@ def dictCreator(input):
         txtPairExists = os.path.isfile(expectedTxtLocation)
         #only add to dict the entries that have valid pairs (txt & img)
         if txtPairExists:
-            entryId = entryId + 1
             tmpDict = {
                 'imagefile': entry,
                 'textfile': expectedTxtName,
                 'assigned': False,
                 'assignedTimeLeft': 'none',
-                'epochs': 0
+                'epochs': 0,
+                'entryId': entryId
             }
             sortedDict[entryId] = tmpDict
+            entryId = entryId + 1
     print("Registered " + str(entryId) + " entries.")
-    return sortedDict
+    return sortedDict, entryId
 
 #directory to the dataset
 dataDir = args.dataset
-filesDict = dictCreator(dataDir)
+filesDict, numberFiles = dictCreator(dataDir)
 
 app = Flask(__name__)
+
+#current version and info
+@app.route("/info")
+def getInfo():
+    info = {
+        "ServerName": args.name,
+        "ServerDescription": args.description,
+        "ServerVersion": version,
+        "FilesBeingServed": numberFiles,
+        "ExecutedAt": execDate
+    }
+    return jsonify(info)
 
 #getTasksFull
 @app.route("/v1/get/tasks/full")
@@ -74,7 +93,6 @@ def getTasks(wantedTasks):
     intWantedTasks = int(wantedTasks) - 1
     listToReturn = []
     sortedDict = sorted(filesDict.items(), key=lambda x_y: x_y[1]['epochs'])
-    print(sortedDict)
     obtainedTasks = 0
     x = 0
     while obtainedTasks < intWantedTasks:
@@ -107,9 +125,22 @@ def getFiles():
     print("About to be sent!")
     return send_file(memory_file, as_attachment=True, download_name="file.zip", mimetype="application/zip")
 
-@app.route("v1/post/epochcount", methods=['POST'])
+#for some reason the dict turned into a list out of nowhere idk what is going on here
+@app.route("/v1/post/epochcount", methods=['POST'])
 def epochCount():
-    return("WIP")
+    print("Someone is reporting an epoch completition.")
+    try:
+        content = request.get_json(force=True)
+    except Exception:
+        return(Response("Failed decoding JSON", status=400))
+    for i in range(len(content)):
+        entryId = content[i][1]['entryId']
+        currentNumOfEpoch = filesDict[int(entryId)]['epochs']
+        newNumOfEpoch = currentNumOfEpoch + 1
+        filesDict[entryId]['epochs'] = newNumOfEpoch
+    print("Saved Successfully")
+    return(Response(status=200))
+    
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
