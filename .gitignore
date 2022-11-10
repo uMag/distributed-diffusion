@@ -1,1 +1,3 @@
 tmp/*
+utils/dataset/online/server/data/*
+*.pyc
