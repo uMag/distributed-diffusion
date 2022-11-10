@@ -12,6 +12,9 @@ parser.add_argument('--new', type=bool, default=False, help='re-scan the dataset
 parser.add_argument('--load', type=str, default=None, help='path to the JSON DB snapshot')
 args = parser.parse_args()
 
+#in minutes
+timeToTaskComplete = 5.0
+
 #gt/GetTime
 def gt():
     return(str(time.time_ns()))
@@ -44,6 +47,7 @@ def dictCreator(input):
                 'imagefile': entry,
                 'textfile': expectedTxtName,
                 'assigned': False,
+                'assignedTimeLeft': 'none',
                 'epochs': 0
             }
             sortedDict[entryId] = tmpDict
@@ -56,18 +60,35 @@ filesDict = dictCreator(dataDir)
 
 app = Flask(__name__)
 
-filesDict[16]["epochs"] = 1
+#getTasksFull
+@app.route("/v1/get/tasks/full")
+def getTasksFull():
+    return jsonify(filesDict)
 
 #getTasks: return entries(objects) in dataset that need training
 #it should return a list, that contains entries with low train count.
 @app.route("/v1/get/tasks/<string:wantedTasks>")
 #reverse=True to get descending
 def getTasks(wantedTasks):
-    intWantedTasks = int(wantedTasks)
+    #minus one cuz computer number system != human
+    intWantedTasks = int(wantedTasks) - 1
     listToReturn = []
     sortedDict = sorted(filesDict.items(), key=lambda x_y: x_y[1]['epochs'])
-    for i in range(intWantedTasks):
-        listToReturn.append(sortedDict[i])
+    print(sortedDict)
+    obtainedTasks = 0
+    x = 0
+    while obtainedTasks < intWantedTasks:
+        for i in sortedDict:
+            if obtainedTasks > intWantedTasks:
+                break
+            if sortedDict[x][1]['assigned']:
+                x = x + 1
+                break
+            listToReturn.append(sortedDict[x])
+            entryId = sortedDict[x][0]
+            filesDict[entryId]['assigned'] = True
+            obtainedTasks = obtainedTasks + 1
+            x = x + 1
     return jsonify(listToReturn)
     
 @app.route('/v1/get/files', methods=['POST'])
@@ -79,12 +100,16 @@ def getFiles():
         for i in range(len(content)):
             imgFile = content[i][1]['imagefile']
             txtFile = content[i][1]['textfile']
-            zf.write(solvePath(imgFile))
-            zf.write(solvePath(txtFile))
+            zf.write(solvePath(imgFile), imgFile)
+            zf.write(solvePath(txtFile), txtFile)
         zf.close()
     memory_file.seek(0)
     print("About to be sent!")
-    return send_file(memory_file, as_attachment=True, download_name="file.zip")
+    return send_file(memory_file, as_attachment=True, download_name="file.zip", mimetype="application/zip")
+
+@app.route("v1/post/epochcount", methods=['POST'])
+def epochCount():
+    return("WIP")
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
