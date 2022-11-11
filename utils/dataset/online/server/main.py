@@ -6,24 +6,25 @@ import argparse
 import time
 from io import BytesIO
 from datetime import datetime
+import threading
 
 parser = argparse.ArgumentParser(description='Dataset server')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='Path to dataset')
 parser.add_argument('--new', type=bool, default=False, help='re-scan the dataset folder')
 parser.add_argument('--load', type=str, default=None, help='path to the JSON DB snapshot')
 parser.add_argument('--name', type=str, default=None, required=True, help='Server name')
-parser.add_argument('--description', type=str, default=None, required=True, help='Server description')
+parser.add_argument('--description', type=str, default="Just a dataset server", required=False, help='Server description')
 args = parser.parse_args()
 
 #info
-version = "0.1a"
+version = "v1"
 execDate = str(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
 print("Server Version: " + version)
 print("Current Time: " + execDate)
 
-#gt/GetTime
+#gt/GetTime in seconds
 def gt():
-    return(str(time.time_ns()))
+    return(time.time())
 
 #this should not be used in the final version + might have directory traversal
 def solvePath(filename):
@@ -52,7 +53,7 @@ def dictCreator(input):
                 'imagefile': entry,
                 'textfile': expectedTxtName,
                 'assigned': False,
-                'assignedTimeLeft': 'none',
+                'assignedExpirationDate': 'none',
                 'epochs': 0,
                 'entryId': entryId
             }
@@ -90,6 +91,9 @@ def getTasksFull():
 #reverse=True to get descending
 def getTasks(wantedTasks):
     #minus one cuz computer number system != human
+    setMinutes = 1
+    actualTime = gt()
+    timeToExpire = actualTime + (60*setMinutes)
     intWantedTasks = int(wantedTasks) - 1
     listToReturn = []
     sortedDict = sorted(filesDict.items(), key=lambda x_y: x_y[1]['epochs'])
@@ -105,6 +109,7 @@ def getTasks(wantedTasks):
             listToReturn.append(sortedDict[x])
             entryId = sortedDict[x][0]
             filesDict[entryId]['assigned'] = True
+            filesDict[entryId]['assignedExpirationDate'] = timeToExpire
             obtainedTasks = obtainedTasks + 1
             x = x + 1
     return jsonify(listToReturn)
@@ -140,7 +145,24 @@ def epochCount():
         filesDict[entryId]['epochs'] = newNumOfEpoch
     print("Saved Successfully")
     return(Response(status=200))
-    
+
+class BackgroundTasks(threading.Thread):
+    def run(self,*args,**kwargs):
+        while True:
+            time.sleep(10/1000)
+            actualTime = gt()
+            for i in filesDict:
+                expectedTime = filesDict[i]['assignedExpirationDate']
+                if expectedTime != "none":
+                    if actualTime > float(expectedTime):
+                        entryId = filesDict[i]['entryId']
+                        print("De-assigning entry " + str(entryId))
+                        filesDict[i]['assigned'] = False
+                        filesDict[i]['assignedExpirationDate'] = "none"
+
+backgroundTask1 = BackgroundTasks()
+backgroundTask1.start()
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
+    
