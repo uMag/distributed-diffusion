@@ -201,7 +201,7 @@ def onlineGather(datasetServer, wantedImages, directoryToExtract):
 #    print("Saving as BytesIO")
 #    memory_file = BytesIO()
     tmpZipFilename = workingDirectory + "/tmp.zip"
-    open(tmpZipFilename, 'wb').write(postDownloadFiles)
+    open(tmpZipFilename, 'wb').write(postDownloadFiles.content)
 #    memory_file.seek(0)
     print("Unzipping...")
     with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
