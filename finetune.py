@@ -201,6 +201,19 @@ def onlineGather(datasetServer, wantedImages, directoryToExtract):
     with zipfile.ZipFile(memory_file, 'r') as zip_ref:
         zip_ref.extractall(directoryToExtract)
     print("Extracted")
+    responseRecipt = responseAsJson
+    return(responseRecipt)
+
+def onlineReport(datasetServer, recipt):
+    print("Reporting epoch completition...")
+    urlDomain = 'http://' + datasetServer
+    urlReport = urlDomain + '/v1/post/epochcount'
+    postReportEpoch = requests.post(urlReport, json=recipt)
+    if postReportEpoch.status_code == 200:
+        return True
+    else:
+        return False
+
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
@@ -756,7 +769,7 @@ def main():
     
     try:
         while True:
-            onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
+            recipt = onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
 
             #Reload Dataset
             store = ImageStore(directoryToExtract)
@@ -932,10 +945,15 @@ def main():
 
             print(get_gpu_ram())
             print('Did one dataset run.')
+            print('Reporting...')
+            reportStatus = onlineReport(datasetServer=datasetServer, recipt=recipt)
+            if reportStatus is True:
+                print("Report Success")
+            else:
+                print("Report failed, exiting")
+                exit()
     except KeyboardInterrupt:
         print("Quitting...")
-        print("Telling the dataset server to unassign my tasks")
-        print("Not implemented yet")
         print("Saving checkpoint...")
         save_checkpoint(global_step)
         print("Checkpoint Saved.")
