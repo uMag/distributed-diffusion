@@ -663,6 +663,8 @@ def main():
     vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token)
     unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token)
 
+    weight_dtype = torch.float16 if args.fp16 else torch.float32
+
     # move models to device
     vae = vae.to(device, dtype=weight_dtype)
     unet = unet.to(device, dtype=torch.float32)
@@ -722,8 +724,6 @@ def main():
     #     num_workers=0,
     #     collate_fn=dataset.collate_fn
     # )
-
-    weight_dtype = torch.float16 if args.fp16 else torch.float32
 
     #unet = torch.nn.parallel.DistributedDataParallel(unet, device_ids=[rank], output_device=rank, gradient_as_bucket_view=True)
 
