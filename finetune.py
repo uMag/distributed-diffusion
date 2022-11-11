@@ -197,14 +197,17 @@ def onlineGather(datasetServer, wantedImages, directoryToExtract):
 
     print("Downloading Files...")
     postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
-    print("Saving as BytesIO")
-    memory_file = BytesIO()
-    open(memory_file, 'wb').write(postDownloadFiles)
-    memory_file.seek(0)
+# TODO: fix memory file
+#    print("Saving as BytesIO")
+#    memory_file = BytesIO()
+    tmpZipFilename = workingDirectory + "/tmp.zip"
+    open(tmpZipFilename, 'wb').write(postDownloadFiles)
+#    memory_file.seek(0)
     print("Unzipping...")
-    with zipfile.ZipFile(memory_file, 'r') as zip_ref:
+    with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
         zip_ref.extractall(directoryToExtract)
     print("Extracted")
+    os.remove(tmpZipFilename)
     responseRecipt = responseAsJson
     return(responseRecipt)
 
