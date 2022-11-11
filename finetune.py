@@ -28,6 +28,10 @@ import numpy as np
 import json
 import re
 import traceback
+from functools import partial
+from hivemind.optim.power_sgd_averager import PowerSGDGradientAverager
+#Remove this
+import hivemind
 
 try:
     pynvml.nvmlInit()
@@ -599,6 +603,7 @@ def hivemindWorker(peersArg, optimizer):
         print("Type: New")
     print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
     print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
+    
 
     hm_opt = hivemind.Optimizer(
         dht=dht,                  # use a DHT that is connected with other peers
@@ -609,7 +614,9 @@ def hivemindWorker(peersArg, optimizer):
         use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
         matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
         averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
-        verbose=True              # print logs incessently
+        verbose=True,              # print logs incessently
+        grad_compression = hivemind.BlockwiseQuantization(), # https://discord.com/channels/865254854262652969/1031776391559139338/1032550805393391698
+        grad_averager_factory = partial(PowerSGDGradientAverager, averager_rank=1) # test 1 for now, https://github.com/learning-at-home/hivemind/releases/tag/1.1.0 , same link as above, https://github.com/learning-at-home/hivemind/blob/dac8940c324dd612d89c773b51a53e4a04c59064/hivemind/optim/power_sgd_averager.py
     )
     return(hm_opt)
 
