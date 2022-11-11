@@ -10,10 +10,12 @@ import threading
 
 parser = argparse.ArgumentParser(description='Dataset server')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='Path to dataset')
-parser.add_argument('--new', type=bool, default=False, help='re-scan the dataset folder')
-parser.add_argument('--load', type=str, default=None, help='path to the JSON DB snapshot')
-parser.add_argument('--name', type=str, default=None, required=True, help='Server name')
+#TODO: make these work
+#parser.add_argument('--new', type=bool, default=True, help='re-scan the dataset folder')
+#parser.add_argument('--load', type=str, default=None, help='path to the JSON DB snapshot')
+parser.add_argument('--name', type=str, default="Dataset Server", help='Server name')
 parser.add_argument('--description', type=str, default="Just a dataset server", required=False, help='Server description')
+parser.add_argument('--tasktimeout', type=int, default=20, required=False, help='Time to wait for a task to be completed (in minutes)')
 args = parser.parse_args()
 
 #info
@@ -91,7 +93,7 @@ def getTasksFull():
 #reverse=True to get descending
 def getTasks(wantedTasks):
     #minus one cuz computer number system != human
-    setMinutes = 1
+    setMinutes = args.tasktimeout
     actualTime = gt()
     timeToExpire = actualTime + (60*setMinutes)
     intWantedTasks = int(wantedTasks) - 1
