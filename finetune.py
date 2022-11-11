@@ -151,6 +151,8 @@ def get_gpu_ram() -> str:
 
 datasetServer = args.datasetserver
 wantedImages = args.wantedimages
+workingDirectory = args.workingdirectory
+directoryToExtract = workingDirectory + "/tmp/dataset"
 
 if datasetServer is None:
     print("No dataset server chosen.")
@@ -179,13 +181,11 @@ else:
         print("Unable to get server info")
         exit()
 
-def onlineGather(datasetServer, wantedImages):
+def onlineGather(datasetServer, wantedImages, directoryToExtract):
     #ex.: datasetServer = "127.0.0.1" assuming port is 80
     print("Dataset server is: " + str(datasetServer))
     #Info on how this works should be on a md file soon
     #Let's say 300 images for now
-    workingDirectory = args.workingdirectory
-    directoryToExtract = workingDirectory + "/tmp/dataset"
     urlDomain = 'http://' + datasetServer
     urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
     requestGetTasks = requests.get(urlGetTasks)
@@ -200,6 +200,7 @@ def onlineGather(datasetServer, wantedImages):
     print("Unzipping...")
     with zipfile.ZipFile(memory_file, 'r') as zip_ref:
         zip_ref.extractall(directoryToExtract)
+    print("Extracted")
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
@@ -680,25 +681,27 @@ def main():
         num_train_timesteps=1000,
     )
 
+    #Commenting this out because we are going to reload it constantly
+
     # load dataset
 
-    store = ImageStore(args.dataset)
-    dataset = AspectDataset(store, tokenizer)
-    bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
-    sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
+    # store = ImageStore(args.dataset)
+    # dataset = AspectDataset(store, tokenizer)
+    # bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
+    # sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
 
-    print(f'STORE_LEN: {len(store)}')
+    # print(f'STORE_LEN: {len(store)}')
 
-    if args.output_bucket_info:
-        print(bucket.get_bucket_info())
-        exit(0)
+    # if args.output_bucket_info:
+    #     print(bucket.get_bucket_info())
+    #     exit(0)
 
-    train_dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_sampler=sampler,
-        num_workers=0,
-        collate_fn=dataset.collate_fn
-    )
+    # train_dataloader = torch.utils.data.DataLoader(
+    #     dataset,
+    #     batch_sampler=sampler,
+    #     num_workers=0,
+    #     collate_fn=dataset.collate_fn
+    # )
 
     weight_dtype = torch.float16 if args.fp16 else torch.float32
 
@@ -710,27 +713,16 @@ def main():
 
     print(get_gpu_ram())
 
-    num_steps_per_epoch = len(train_dataloader)
-    progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
+    # num_steps_per_epoch = len(train_dataloader)
+    # progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
     global_step = 0
 
     if args.resume:
         target_global_step = int(args.resume.split('_')[-1])
         print(f'resuming from {args.resume}...')
 
-    if args.hivemind:
-        import hivemind
-        finalOptimizer = hivemindWorker(args.peers, optimizer)
-    else:
-        #TODO: lr_scheduler does not work with hivemind for some reason
-        lr_scheduler = get_scheduler(
-            args.lr_scheduler,
-            optimizer=optimizer,
-            num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * args.epochs),
-            num_training_steps=args.epochs * num_steps_per_epoch,
-            #last_epoch=(global_step // num_steps_per_epoch) - 1,
-        )
-        finalOptimizer = optimizer
+    def gt():
+        return(time.time_ns())
 
     def save_checkpoint(global_step):
         if rank == 0:
@@ -748,151 +740,205 @@ def main():
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
-            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
-            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}')
+            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}_{str(gt())}')
+            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}_{str(gt())}')
 
             if args.use_ema:
                 ema_unet.restore(unet.parameters())
         # barrier
         torch.distributed.barrier()
 
-    # train!
+    #start training (infinite) loop
+    if args.hivemind:
+        numberOfEpochs = 1
+    else:
+        numberOfEpochs = args.epochs
+    
     try:
-        loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
-        for epoch in range(args.epochs):
-            unet.train()
-            for _, batch in enumerate(train_dataloader):
-                if args.resume and global_step < target_global_step:
-                    if rank == 0:
-                        progress_bar.update(1)
-                    global_step += 1
-                    continue
-                b_start = time.perf_counter()
-                latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
-                latents = latents * 0.18215
+        while True:
+            onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
 
-                # Sample noise
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.num_train_timesteps, (bsz,), device=latents.device)
-                timesteps = timesteps.long()
+            #Reload Dataset
+            store = ImageStore(directoryToExtract)
+            dataset = AspectDataset(store, tokenizer)
+            bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
+            sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
 
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+            print(f'STORE_LEN: {len(store)}')
+            
+            if args.output_bucket_info:
+                print(bucket.get_bucket_info())
+                exit(0)
 
-                # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch['input_ids'].to(device), output_hidden_states=True)
-                if args.clip_penultimate:
-                    encoder_hidden_states = text_encoder.text_model.final_layer_norm(encoder_hidden_states['hidden_states'][-2])
-                else:
-                    encoder_hidden_states = encoder_hidden_states.last_hidden_state
+            train_dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_sampler=sampler,
+                num_workers=0,
+                collate_fn=dataset.collate_fn
+            )
 
-                # Predict the noise residual and compute loss
-                with torch.autocast('cuda', enabled=args.fp16):
-                    noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+            num_steps_per_epoch = len(train_dataloader)
+            progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
+        
+            if args.hivemind:
+                import hivemind
+                finalOptimizer = hivemindWorker(args.peers, optimizer)
+            else:
+                #TODO: lr_scheduler does not work with hivemind for some reason
+                lr_scheduler = get_scheduler(
+                    args.lr_scheduler,
+                    optimizer=optimizer,
+                    num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * args.epochs),
+                    num_training_steps=args.epochs * num_steps_per_epoch,
+                    #last_epoch=(global_step // num_steps_per_epoch) - 1,
+                )
+                finalOptimizer = optimizer
 
-                loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+            # train!
+            try:
+                loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
+                #This might need to be changed to 1 if distributed training
+                for epoch in range(numberOfEpochs):
+                    unet.train()
+                    for _, batch in enumerate(train_dataloader):
+                        if args.resume and global_step < target_global_step:
+                            if rank == 0:
+                                progress_bar.update(1)
+                            global_step += 1
+                            continue
+                        b_start = time.perf_counter()
+                        latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
+                        latents = latents * 0.18215
 
-                # Backprop and all reduce
-                scaler.scale(loss).backward()
-                scaler.step(finalOptimizer)
-                scaler.update()
-                if args.hivemind:
-                    finalOptimizer.step()
-                else:
-                    lr_scheduler.step()
-                finalOptimizer.zero_grad()
+                        # Sample noise
+                        noise = torch.randn_like(latents)
+                        bsz = latents.shape[0]
+                        # Sample a random timestep for each image
+                        timesteps = torch.randint(0, noise_scheduler.num_train_timesteps, (bsz,), device=latents.device)
+                        timesteps = timesteps.long()
 
-                # Update EMA
-                if args.use_ema:
-                    ema_unet.step(unet.parameters())
+                        # Add noise to the latents according to the noise magnitude at each timestep
+                        # (this is the forward diffusion process)
+                        noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # perf
-                b_end = time.perf_counter()
-                seconds_per_step = b_end - b_start
-                steps_per_second = 1 / seconds_per_step
-                rank_images_per_second = args.batch_size * steps_per_second
-                world_images_per_second = rank_images_per_second * world_size
-                samples_seen = global_step * args.batch_size * world_size
-
-                # All reduce loss
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
-
-                if rank == 0:
-                    progress_bar.update(1)
-                    global_step += 1
-                    logs = {
-                        "train/loss": loss.detach().item() / world_size,
-                        "train/epoch": epoch,
-                        "train/step": global_step,
-                        "train/samples_seen": samples_seen,
-                        "perf/rank_samples_per_second": rank_images_per_second,
-                        "perf/global_samples_per_second": world_images_per_second,
-                    }
-                    if args.hivemind != True:
-                        logs["train/lr"] = lr_scheduler.get_last_lr()[0]
-                    progress_bar.set_postfix(logs)
-                    run.log(logs, step=global_step)
-
-                if global_step % args.save_steps == 0:
-                    save_checkpoint(global_step)
-
-                if global_step % args.image_log_steps == 0:
-                    if rank == 0:
-                        # get prompt from random batch
-                        prompt = tokenizer.decode(batch['input_ids'][random.randint(0, len(batch['input_ids'])-1)].tolist())
-
-                        if args.image_log_scheduler == 'DDIMScheduler':
-                            print('using DDIMScheduler scheduler')
-                            scheduler = DDIMScheduler(
-                                beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear"
-                            )
+                        # Get the text embedding for conditioning
+                        encoder_hidden_states = text_encoder(batch['input_ids'].to(device), output_hidden_states=True)
+                        if args.clip_penultimate:
+                            encoder_hidden_states = text_encoder.text_model.final_layer_norm(encoder_hidden_states['hidden_states'][-2])
                         else:
-                            print('using PNDMScheduler scheduler')
-                            scheduler=PNDMScheduler(
-                                beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
-                            )
+                            encoder_hidden_states = encoder_hidden_states.last_hidden_state
 
-                        pipeline = StableDiffusionPipeline(
-                            text_encoder=text_encoder,
-                            vae=vae,
-                            unet=unet,
-                            tokenizer=tokenizer,
-                            scheduler=scheduler,
-                            safety_checker=None, # disable safety checker to save memory
-                            feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
-                        ).to(device)
-                        # inference
-                        images = []
-                        with torch.no_grad():
-                            with torch.autocast('cuda', enabled=args.fp16):
-                                for _ in range(args.image_log_amount):
-                                    images.append(
-                                        wandb.Image(pipeline(
-                                            prompt, num_inference_steps=args.image_log_inference_steps
-                                        ).images[0],
-                                        caption=prompt)
+                        # Predict the noise residual and compute loss
+                        with torch.autocast('cuda', enabled=args.fp16):
+                            noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+
+                        loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+
+                        # Backprop and all reduce
+                        scaler.scale(loss).backward()
+                        scaler.step(finalOptimizer)
+                        scaler.update()
+                        if args.hivemind:
+                            finalOptimizer.step()
+                        else:
+                            lr_scheduler.step()
+                        finalOptimizer.zero_grad()
+
+                        # Update EMA
+                        if args.use_ema:
+                            ema_unet.step(unet.parameters())
+
+                        # perf
+                        b_end = time.perf_counter()
+                        seconds_per_step = b_end - b_start
+                        steps_per_second = 1 / seconds_per_step
+                        rank_images_per_second = args.batch_size * steps_per_second
+                        world_images_per_second = rank_images_per_second * world_size
+                        samples_seen = global_step * args.batch_size * world_size
+
+                        # All reduce loss
+                        torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+
+                        if rank == 0:
+                            progress_bar.update(1)
+                            global_step += 1
+                            logs = {
+                                "train/loss": loss.detach().item() / world_size,
+                                "train/epoch": epoch,
+                                "train/step": global_step,
+                                "train/samples_seen": samples_seen,
+                                "perf/rank_samples_per_second": rank_images_per_second,
+                                "perf/global_samples_per_second": world_images_per_second,
+                            }
+                            if args.hivemind != True:
+                                logs["train/lr"] = lr_scheduler.get_last_lr()[0]
+                            progress_bar.set_postfix(logs)
+                            run.log(logs, step=global_step)
+
+                        if global_step % args.save_steps == 0:
+                            save_checkpoint(global_step)
+
+                        if global_step % args.image_log_steps == 0:
+                            if rank == 0:
+                                # get prompt from random batch
+                                prompt = tokenizer.decode(batch['input_ids'][random.randint(0, len(batch['input_ids'])-1)].tolist())
+
+                                if args.image_log_scheduler == 'DDIMScheduler':
+                                    print('using DDIMScheduler scheduler')
+                                    scheduler = DDIMScheduler(
+                                        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear"
                                     )
-                        # log images under single caption
-                        run.log({'images': images}, step=global_step)
+                                else:
+                                    print('using PNDMScheduler scheduler')
+                                    scheduler=PNDMScheduler(
+                                        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
+                                    )
 
-                        # cleanup so we don't run out of memory
-                        del pipeline
-                        gc.collect()
-                    torch.distributed.barrier()
-    except Exception as e:
-        print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
-        pass
+                                pipeline = StableDiffusionPipeline(
+                                    text_encoder=text_encoder,
+                                    vae=vae,
+                                    unet=unet,
+                                    tokenizer=tokenizer,
+                                    scheduler=scheduler,
+                                    safety_checker=None, # disable safety checker to save memory
+                                    feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                                ).to(device)
+                                # inference
+                                images = []
+                                with torch.no_grad():
+                                    with torch.autocast('cuda', enabled=args.fp16):
+                                        for _ in range(args.image_log_amount):
+                                            images.append(
+                                                wandb.Image(pipeline(
+                                                    prompt, num_inference_steps=args.image_log_inference_steps
+                                                ).images[0],
+                                                caption=prompt)
+                                            )
+                                # log images under single caption
+                                run.log({'images': images}, step=global_step)
 
-    save_checkpoint(global_step)
+                                # cleanup so we don't run out of memory
+                                del pipeline
+                                gc.collect()
+                            torch.distributed.barrier()
+            except Exception as e:
+                print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
+                pass
 
-    torch.distributed.barrier()
-    cleanup()
+            save_checkpoint(global_step)
 
-    print(get_gpu_ram())
-    print('Done!')
+            torch.distributed.barrier()
+            cleanup()
+
+            print(get_gpu_ram())
+            print('Did one dataset run.')
+    except KeyboardInterrupt:
+        print("Quitting...")
+        print("Telling the dataset server to unassign my tasks")
+        print("Not implemented yet")
+        print("Saving checkpoint...")
+        save_checkpoint(global_step)
+        print("Checkpoint Saved.")
 
 if __name__ == "__main__":
     setup()
