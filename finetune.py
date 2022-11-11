@@ -61,7 +61,7 @@ parser = argparse.ArgumentParser(description='Stable Diffusion Finetuner')
 parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--resume', type=str, default=None, help='The path to the checkpoint to resume from. If not specified, will create a new run.')
 parser.add_argument('--run_name', type=str, default=None, required=True, help='Name of the finetune run.')
-parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
+#parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
 parser.add_argument('--num_buckets', type=int, default=16, help='The number of buckets.')
 parser.add_argument('--bucket_side_min', type=int, default=256, help='The minimum side length of a bucket.')
 parser.add_argument('--bucket_side_max', type=int, default=768, help='The maximum side length of a bucket.')
@@ -93,7 +93,7 @@ parser.add_argument('--image_log_scheduler', type=str, default="PNDMScheduler", 
 parser.add_argument('--clip_penultimate', type=bool, default=False, help='Use penultimate CLIP layer for text embedding')
 parser.add_argument('--output_bucket_info', type=bool, default=False, help='Outputs bucket information and exits')
 #Distributed flags:
-parser.add_argument('--hivemind', dest='hivemind', default=None, help='Enable hivemind usage')
+parser.add_argument('--hivemind', type=bool, dest='hivemind', default=False, help='Enable hivemind usage')
 parser.add_argument('--peers', type=str, default=None, nargs="*", help='MUST BE PASSED AS A LIST! ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2 | Multiaddrs of one or more active DHT peers. If none it will start a new session.')
 parser.add_argument('--datasetserver', type=str, dest='datasetserver', default=None, help='Address of dataset server')
 parser.add_argument('--wantedimages', type=str, dest='wantedimages', default=None, help='Number of wanted images')
@@ -801,7 +801,6 @@ def main():
             progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
         
             if args.hivemind:
-                import hivemind
                 finalOptimizer = hivemindWorker(args.peers, optimizer)
             else:
                 #TODO: lr_scheduler does not work with hivemind for some reason
