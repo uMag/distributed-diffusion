@@ -6,7 +6,9 @@
 # Multiple GPUs: torchrun --nproc_per_node=N trainer_dist.py --model="CompVis/stable-diffusion-v1-4" --run_name="liminal" --dataset="liminal-dataset" --hf_token="hf_blablabla" --bucket_side_min=64 --use_8bit_adam=True --gradient_checkpointing=True --batch_size=10 --fp16=True --image_log_steps=250 --epochs=20 --resolution=768 --use_ema=True
 
 import argparse
+from io import BytesIO
 import socket
+import zipfile
 import torch
 import torchvision
 import transformers
@@ -41,6 +43,10 @@ from PIL import Image
 
 from typing import Dict, List, Generator, Tuple
 from scipy.interpolate import interp1d
+
+#Distributed imports:
+import requests
+import json
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -86,6 +92,8 @@ parser.add_argument('--output_bucket_info', type=bool, default=False, help='Outp
 parser.add_argument('--hivemind', dest='hivemind', default=None, help='Enable hivemind usage')
 parser.add_argument('--peers', type=str, default=None, nargs="*", help='MUST BE PASSED AS A LIST! ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2 | Multiaddrs of one or more active DHT peers. If none it will start a new session.')
 parser.add_argument('--datasetserver', type=str, dest='datasetserver', default=None, help='Address of dataset server')
+parser.add_argument('--wantedimages', type=str, dest='wantedimages', default=None, help='Number of wanted images')
+parser.add_argument('--workingdirectory', type=str, dest='workingdirectory', default="distributed_data", help='Folder where the downloader is going to do its work')
 
 
 args = parser.parse_args()
@@ -141,14 +149,57 @@ def get_gpu_ram() -> str:
            f"{gpu_str}" \
            f"{torch_str}"
 
-def onlineGather(datasetServer):
+datasetServer = args.datasetserver
+wantedImages = args.wantedimages
+
+if datasetServer is None:
+    print("No dataset server chosen.")
+else:
+    print("Dataset server is: " + datasetServer)
+    if wantedImages is None:
+        wantedImages = input("How many images to download each time? ")
+        wantedImages = int(wantedImages)
+    print("Number of images to download each time: " + str(wantedImages))
+    print("Attempting to get server info...")
+    #ex.: datasetServer = 127.0.0.1
+    r = requests.get('http://' + str(datasetServer) + '/info')
+    if r.status_code == 200:
+        data = json.loads(r.text)
+        serverName = data['ServerName']
+        serverDescription = data['ServerDescription']
+        serverVersion = data['ServerVersion']
+        serverFileCount = data['FilesBeingServed']
+        serverAge = data['ExecutedAt']
+        print("You are now connected to " + serverName)
+        print(serverDescription)
+        print("Server Version: " + serverVersion)
+        print("Currently serving " + str(serverFileCount) + " Files")
+        print("Age: " + serverAge)
+    else:
+        print("Unable to get server info")
+        exit()
+
+def onlineGather(datasetServer, wantedImages):
+    #ex.: datasetServer = "127.0.0.1" assuming port is 80
     print("Dataset server is: " + str(datasetServer))
-    #Determine how much work this node can handle
-    #Batch size 4 works on 3090 according to https://discord.com/channels/1015751613840883732/1016208017437495298/1034647025817497630
-    #Try with 2 first
-    #wip
+    #Info on how this works should be on a md file soon
+    #Let's say 300 images for now
+    workingDirectory = args.workingdirectory
+    directoryToExtract = workingDirectory + "/tmp/dataset"
+    urlDomain = 'http://' + datasetServer
+    urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
+    requestGetTasks = requests.get(urlGetTasks)
+    responseAsJson = requestGetTasks.json()
 
-
+    print("Downloading Files...")
+    postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
+    print("Saving as BytesIO")
+    memory_file = BytesIO()
+    open(memory_file, 'wb').write(postDownloadFiles)
+    memory_file.seek(0)
+    print("Unzipping...")
+    with zipfile.ZipFile(memory_file, 'r') as zip_ref:
+        zip_ref.extractall(directoryToExtract)
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
