@@ -1,3 +1,4 @@
+import sys
 from flask import Flask, jsonify, request, send_file, Response
 from pathlib import Path
 from zipfile import ZipFile
@@ -7,6 +8,7 @@ import time
 from io import BytesIO
 from datetime import datetime
 import threading
+import keyboard
 
 parser = argparse.ArgumentParser(description='Dataset server')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='Path to dataset')
@@ -150,7 +152,11 @@ def epochCount():
 
 class BackgroundTasks(threading.Thread):
     def run(self,*args,**kwargs):
+        print("Press q to quit background checker")
         while True:
+            if keyboard.is_pressed('q'):
+                print("Quitting background checker...")
+                sys.exit()
             time.sleep(10/1000)
             actualTime = gt()
             for i in filesDict:
@@ -161,6 +167,7 @@ class BackgroundTasks(threading.Thread):
                         print("De-assigning entry " + str(entryId))
                         filesDict[i]['assigned'] = False
                         filesDict[i]['assignedExpirationDate'] = "none"
+
 
 backgroundTask1 = BackgroundTasks()
 backgroundTask1.start()
