@@ -147,6 +147,8 @@ def epochCount():
         currentNumOfEpoch = filesDict[int(entryId)]['epochs']
         newNumOfEpoch = currentNumOfEpoch + 1
         filesDict[entryId]['epochs'] = newNumOfEpoch
+        filesDict[i]['assigned'] = False
+        filesDict[i]['assignedExpirationDate'] = "none"
     print("Saved Successfully")
     return(Response(status=200))
 
