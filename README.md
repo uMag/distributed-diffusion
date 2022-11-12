@@ -1,18 +1,15 @@
 # Distributed Diffusion
 Train Stable Diffusion models across the internet with multiple peers
 
+Most of the code derives from WaifuDiffusion diffuser's trainer, now licensed under AGPL.
+
 This project is in alpha and is under testing
 
 
 ## Requirements
 
-8 Bit Adam:
-- 17.4GB of VRAM
-- 12.5GB of RAM
-
-8 Bit Adam and FP16 (BROKEN):
-- 19GB of VRAM
-- 8GB of RAM
+8 Bit Adam + Gradient Checkpointing:
+- 13.5GB of VRAM
 
 - A good and stable internet connection
 - Python 3
@@ -20,32 +17,29 @@ This project is in alpha and is under testing
 - Have installed dependencies on requirements.txt
 
 ## How to use
+In all instances, N is the number of GPUs you want to run it on. To see what parameter does what, check the flags section.
+### Distributed Training:
+New Session:
+```
+torchrun --nproc_per_node=N finetune.py --datasetserver="URL of my dataset server" --wantedimages=300 --model ./diffusermodel --run_name myFinetunedModel --hivemind="True" 
+```
+
+Connect to existing session:
+```
+torchrun --nproc_per_node=N finetune.py --datasetserver="URL of my dataset server" --wantedimages=300 --model ./diffusermodel --run_name myFinetunedModel --hivemind="True" --peers="Provided DHT peers"
+```
+
+### Local Training:
 
 Ex.: 
 ```
-python3 finetune.py --dataset ./directory_of_my_dataset --model ./diffuser_folder_of_base_model --run_name my_finetuned_model
+python3 finetune.py --dataset ./dataset --model ./diffusermodel --run_name="myFinetunedModel"
 ```
 
 ### A step-by-step guide is available here: https://rentry.org/informal-training-guide
 
+### Flags:
 There is a long list of flags you can set on the script, but the most important ones are the following:
-
-Required flags:
-- --model : Set the path to model, must be in diffusers form
-- --run_name : Name for the training run, does not interfere with Hivemind
-- --dataset : Set the path to the dataset, images and text files must be in the same folder
-
-Optional Flags:
-- --lr : Set the Lreaning rate, float type, default is 5e-6.
-- --epochs: Set the number of epochs ([Definition](https://deepai.org/machine-learning-glossary-and-terms/epoch)) to train for, integer type, deafult is 10.
-- --batch_size : Batch size to use. Fills more VRAM but trains faster. integer type, default is 1.
-- --center_crop : Crop Images during training to it's center. Default is True, if disabled it might break if it gets a 512x512+ image.
-- --fp16 : BROKEN. Train in mixed precision, accelerating the process. Default is False, and according to some users it is currently broken since loss gets to NaN in the long run.
-
-Hivemind Specific:
-- --peers : Set the peers to connect to, separated by space bar and as a list. If None then a new session will be started. Ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2
-- --hivemind: Enable hivemind distributed training (ALPHA)
-- --hfstream : Stream dataset from HuggingFace.
 
 More flags: https://github.com/chavinlo/distributed-diffusion/blob/main/finetune.py#L34
 
