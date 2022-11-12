@@ -6,9 +6,7 @@
 # Multiple GPUs: torchrun --nproc_per_node=N trainer_dist.py --model="CompVis/stable-diffusion-v1-4" --run_name="liminal" --dataset="liminal-dataset" --hf_token="hf_blablabla" --bucket_side_min=64 --use_8bit_adam=True --gradient_checkpointing=True --batch_size=10 --fp16=True --image_log_steps=250 --epochs=20 --resolution=768 --use_ema=True
 
 import argparse
-from io import BytesIO
 import socket
-import zipfile
 import torch
 import torchvision
 import transformers
@@ -28,10 +26,11 @@ import numpy as np
 import json
 import re
 import traceback
-from functools import partial
-from hivemind.optim.power_sgd_averager import PowerSGDGradientAverager
-#Remove this
+#Distributed only
 import hivemind
+import requests
+import zipfile
+import shutil
 
 try:
     pynvml.nvmlInit()
@@ -43,35 +42,30 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, PNDMSc
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.optimization import get_scheduler
 from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
-from PIL import Image
+from PIL import Image, ImageOps
 
 from typing import Dict, List, Generator, Tuple
 from scipy.interpolate import interp1d
-
-#Distributed imports:
-import requests
-import json
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # defaults should be good for everyone
 # TODO: add custom VAE support. should be simple with diffusers
 parser = argparse.ArgumentParser(description='Stable Diffusion Finetuner')
-#Original flags:
 parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--resume', type=str, default=None, help='The path to the checkpoint to resume from. If not specified, will create a new run.')
 parser.add_argument('--run_name', type=str, default=None, required=True, help='Name of the finetune run.')
-#parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
+parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
 parser.add_argument('--num_buckets', type=int, default=16, help='The number of buckets.')
 parser.add_argument('--bucket_side_min', type=int, default=256, help='The minimum side length of a bucket.')
 parser.add_argument('--bucket_side_max', type=int, default=768, help='The maximum side length of a bucket.')
 parser.add_argument('--lr', type=float, default=5e-6, help='Learning rate')
 parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train for')
 parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
-parser.add_argument('--use_ema', type=bool, default=False, help='Use EMA for finetuning')
+parser.add_argument('--use_ema', type=str, default='False', help='Use EMA for finetuning')
 parser.add_argument('--ucg', type=float, default=0.1, help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.') # 10% dropout probability
-parser.add_argument('--gradient_checkpointing', dest='gradient_checkpointing', type=bool, default=False, help='Enable gradient checkpointing')
-parser.add_argument('--use_8bit_adam', dest='use_8bit_adam', type=bool, default=False, help='Use 8-bit Adam optimizer')
+parser.add_argument('--gradient_checkpointing', dest='gradient_checkpointing', type=str, default='False', help='Enable gradient checkpointing')
+parser.add_argument('--use_8bit_adam', dest='use_8bit_adam', type=str, default='False', help='Use 8-bit Adam optimizer')
 parser.add_argument('--adam_beta1', type=float, default=0.9, help='Adam beta1')
 parser.add_argument('--adam_beta2', type=float, default=0.999, help='Adam beta2')
 parser.add_argument('--adam_weight_decay', type=float, default=1e-2, help='Adam weight decay')
@@ -82,25 +76,37 @@ parser.add_argument('--seed', type=int, default=42, help='Seed for random number
 parser.add_argument('--output_path', type=str, default='./output', help='Root path for all outputs.')
 parser.add_argument('--save_steps', type=int, default=500, help='Number of steps to save checkpoints at.')
 parser.add_argument('--resolution', type=int, default=512, help='Image resolution to train against. Lower res images will be scaled up to this resolution and higher res images will be scaled down.')
-parser.add_argument('--shuffle', dest='shuffle', type=bool, default=True, help='Shuffle dataset')
+parser.add_argument('--shuffle', dest='shuffle', type=str, default='True', help='Shuffle dataset')
 parser.add_argument('--hf_token', type=str, default=None, required=False, help='A HuggingFace token is needed to download private models for training.')
 parser.add_argument('--project_id', type=str, default='diffusers', help='Project ID for reporting to WandB')
-parser.add_argument('--fp16', dest='fp16', type=bool, default=False, help='Train in mixed precision')
+parser.add_argument('--fp16', dest='fp16', type=str, default='False', help='Train in mixed precision')
 parser.add_argument('--image_log_steps', type=int, default=100, help='Number of steps to log images at.')
 parser.add_argument('--image_log_amount', type=int, default=4, help='Number of images to log every image_log_steps')
 parser.add_argument('--image_log_inference_steps', type=int, default=50, help='Number of inference steps to use to log images.')
 parser.add_argument('--image_log_scheduler', type=str, default="PNDMScheduler", help='Number of inference steps to use to log images.')
-parser.add_argument('--clip_penultimate', type=bool, default=False, help='Use penultimate CLIP layer for text embedding')
-parser.add_argument('--output_bucket_info', type=bool, default=False, help='Outputs bucket information and exits')
-#Distributed flags:
-parser.add_argument('--hivemind', type=bool, dest='hivemind', default=False, help='Enable hivemind usage')
+parser.add_argument('--clip_penultimate', type=str, default='False', help='Use penultimate CLIP layer for text embedding')
+parser.add_argument('--output_bucket_info', type=str, default='False', help='Outputs bucket information and exits')
+parser.add_argument('--resize', type=str, default='False', help="Resizes dataset's images to the appropriate bucket dimensions.")
+parser.add_argument('--use_xformers', type=str, default='False', help='Use memory efficient attention')
+#Modified
+parser.add_argument('--wandb', dest='enablewandb', type=str, default='False', help='Enable WeightsAndBiases Reporting')
+parser.add_argument('--inference', dest='enableinference', type=str, default='False', help='Enable Inference during training (Consumes 2GB of VRAM)')
+#Hivemind only
+parser.add_argument('--hivemind', dest='enablehivemind', type=str, default='False', help='Enable Hivemind usage)')
 parser.add_argument('--peers', type=str, default=None, nargs="*", help='MUST BE PASSED AS A LIST! ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2 | Multiaddrs of one or more active DHT peers. If none it will start a new session.')
+#Dataset server
 parser.add_argument('--datasetserver', type=str, dest='datasetserver', default=None, help='Address of dataset server')
-parser.add_argument('--wantedimages', type=str, dest='wantedimages', default=None, help='Number of wanted images')
+parser.add_argument('--wantedimages', type=int, dest='wantedimages', default=None, help='Number of wanted images')
 parser.add_argument('--workingdirectory', type=str, dest='workingdirectory', default="distributed_data", help='Folder where the downloader is going to do its work')
 
-
 args = parser.parse_args()
+
+for arg in vars(args):
+    if type(getattr(args, arg)) == str:
+        if getattr(args, arg).lower() == 'true':
+            setattr(args, arg, True)
+        elif getattr(args, arg).lower() == 'false':
+            setattr(args, arg, False)
 
 def setup():
     torch.distributed.init_process_group("nccl", init_method="env://")
@@ -155,41 +161,38 @@ def get_gpu_ram() -> str:
 
 datasetServer = args.datasetserver
 wantedImages = args.wantedimages
-workingDirectory = args.workingdirectory
-directoryToExtract = workingDirectory + "/tmp/dataset"
-
 if datasetServer is None:
     print("No dataset server chosen.")
 else:
     print("Dataset server is: " + datasetServer)
     if wantedImages is None:
-        wantedImages = input("How many images to download each time? ")
-        wantedImages = int(wantedImages)
+        wantedImages = int(input("How many images to download each time?: "))
     print("Number of images to download each time: " + str(wantedImages))
     print("Attempting to get server info...")
     #ex.: datasetServer = 127.0.0.1
     r = requests.get('http://' + str(datasetServer) + '/info')
     if r.status_code == 200:
         data = json.loads(r.text)
-        serverName = data['ServerName']
-        serverDescription = data['ServerDescription']
-        serverVersion = data['ServerVersion']
-        serverFileCount = data['FilesBeingServed']
-        serverAge = data['ExecutedAt']
-        print("You are now connected to " + serverName)
-        print(serverDescription)
-        print("Server Version: " + serverVersion)
-        print("Currently serving " + str(serverFileCount) + " Files")
-        print("Age: " + serverAge)
+        print("Server: " + data['ServerName'])
+        print(data['ServerDescription'])
+        print("Server Version: " + data['ServerVersion'])
+        print("Currently serving " + str(data['FilesBeingServed']) + " Files")
+        print("Age: " + data['ExecutedAt'])
     else:
         print("Unable to get server info")
         exit()
+
+workingDirectory = args.workingdirectory
+directoryToExtract = workingDirectory + "/tmp/dataset"
+print("directoryToExtract: " + directoryToExtract)
+print("Wokring: " + workingDirectory)
+
+os.makedirs(workingDirectory, exist_ok=True)
 
 def onlineGather(datasetServer, wantedImages, directoryToExtract):
     #ex.: datasetServer = "127.0.0.1" assuming port is 80
     print("Dataset server is: " + str(datasetServer))
     #Info on how this works should be on a md file soon
-    #Let's say 300 images for now
     urlDomain = 'http://' + datasetServer
     urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
     requestGetTasks = requests.get(urlGetTasks)
@@ -197,14 +200,15 @@ def onlineGather(datasetServer, wantedImages, directoryToExtract):
 
     print("Downloading Files...")
     postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
-# TODO: fix memory file
-#    print("Saving as BytesIO")
-#    memory_file = BytesIO()
+    #TODO: fix memory file
+    #print("Saving as BytesIO")
+    #memory_file = BytesIO()
     tmpZipFilename = workingDirectory + "/tmp.zip"
     open(tmpZipFilename, 'wb').write(postDownloadFiles.content)
-#    memory_file.seek(0)
+    #memory_file.seek(0)
     print("Unzipping...")
     with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
+        print("Extracting to: " + directoryToExtract)
         zip_ref.extractall(directoryToExtract)
     print("Extracted")
     os.remove(tmpZipFilename)
@@ -220,7 +224,6 @@ def onlineReport(datasetServer, recipt):
         return True
     else:
         return False
-
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
@@ -250,16 +253,16 @@ class ImageStore:
     # iterator returns images as PIL images and their index in the store
     def entries_iterator(self) -> Generator[Tuple[Image.Image, int], None, None]:
         for f in range(len(self)):
-            yield Image.open(self.image_files[f]), f
+            yield Image.open(self.image_files[f]).convert(mode='RGB'), f
 
     # get image by index
-    def get_image(self, index: int) -> Image.Image:
-        return Image.open(self.image_files[index])
+    def get_image(self, ref: Tuple[int, int, int]) -> Image.Image:
+        return Image.open(self.image_files[ref[0]]).convert(mode='RGB')
 
     # gets caption by removing the extension from the filename and replacing it with .txt
-    def get_caption(self, index: int) -> str:
-        filename = re.sub('\.[^/.]+$', '', self.image_files[index]) + '.txt'
-        with open(filename, 'r') as f:
+    def get_caption(self, ref: Tuple[int, int, int]) -> str:
+        filename = re.sub('\.[^/.]+$', '', self.image_files[ref[0]]) + '.txt'
+        with open(filename, 'r', encoding='UTF-8') as f:
             return f.read()
 
 
@@ -357,12 +360,12 @@ class AspectBucket:
     def get_bucket_info(self):
         return json.dumps({ "buckets": self.buckets, "bucket_ratios": self._bucket_ratios })
 
-    def get_batch_iterator(self) -> Generator[Tuple[Tuple[int, int], List[int]], None, None]:
+    def get_batch_iterator(self) -> Generator[Tuple[Tuple[int, int, int]], None, None]:
         """
         Generator that provides batches where the images in a batch fall on the same bucket
 
         Each element generated will be:
-            ((w, h), [image1, image2, ..., image{batch_size}])
+            (index, w, h)
 
         where each image is an index into the dataset
         :return:
@@ -406,7 +409,7 @@ class AspectBucket:
 
             total_generated_by_bucket[b] += self.batch_size
             bucket_pos[b] = i
-            yield [idx for idx in batch]
+            yield [(idx, *b) for idx in batch]
 
     def fill_buckets(self):
         entries = self.store.entries_iterator()
@@ -471,16 +474,26 @@ class AspectDataset(torch.utils.data.Dataset):
         self.transforms = torchvision.transforms.Compose([
             torchvision.transforms.RandomHorizontalFlip(p=0.5),
             torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize([0.5], [0.5]),
+            torchvision.transforms.Normalize([0.5], [0.5])
         ])
 
     def __len__(self):
         return len(self.store)
 
-    def __getitem__(self, item: int):
+    def __getitem__(self, item: Tuple[int, int, int]):
         return_dict = {'pixel_values': None, 'input_ids': None}
 
         image_file = self.store.get_image(item)
+
+        if args.resize:
+            image_file = ImageOps.fit(
+                image_file,
+                (item[1], item[2]),
+                bleed=0.0,
+                centering=(0.5, 0.5),
+                method=Image.Resampling.LANCZOS
+            )
+
         return_dict['pixel_values'] = self.transforms(image_file)
         if random.random() > self.ucg:
             caption_file = self.store.get_caption(item)
@@ -588,10 +601,10 @@ class EMAModel:
             for p in self.shadow_params
         ]
 
-def hivemindWorker(peersArg, optimizer):
+def hivemindWorker(optimizer, peersArg=None):
     init_peers = peersArg
     optimizer = optimizer
-    if init_peers:
+    if init_peers is not None:
         dht = hivemind.DHT(
             host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
             initial_peers=init_peers, 
@@ -611,26 +624,33 @@ def hivemindWorker(peersArg, optimizer):
     hm_opt = hivemind.Optimizer(
         dht=dht,                  # use a DHT that is connected with other peers
         run_id='test_run',    # unique identifier of this collaborative run
-        batch_size_per_step=32,   # each call to opt.step adds this many samples towards the next epoch
+        batch_size_per_step=1,   # each call to opt.step adds this many samples towards the next epoch
         target_batch_size=10000,  # after peers collectively process this many samples, average weights and begin the next epoch 
         optimizer=optimizer,            # wrap the SGD optimizer defined above
         #use_local_updates=True,   # perform optimizer steps with local gradients, average parameters in background
         matchmaking_time=270.0,     # when averaging parameters, gather peers in background for up to this many seconds
         averaging_timeout=270.0,   # give up on averaging if not successful in this many seconds
         verbose=True,              # print logs incessently
-        grad_compression = hivemind.BlockwiseQuantization(), # https://discord.com/channels/865254854262652969/1031776391559139338/1032550805393391698
-        grad_averager_factory = partial(PowerSGDGradientAverager, averager_rank=1) # test 1 for now, https://github.com/learning-at-home/hivemind/releases/tag/1.1.0 , same link as above, https://github.com/learning-at-home/hivemind/blob/dac8940c324dd612d89c773b51a53e4a04c59064/hivemind/optim/power_sgd_averager.py
-    )
+            )
     return(hm_opt)
+
 
 def main():
     rank = get_rank()
     world_size = get_world_size()
     torch.cuda.set_device(rank)
 
+    enablewandb = args.enablewandb
+    enableinference = args.enableinference
+    enablehivemind = args.enablehivemind
+
     if rank == 0:
         os.makedirs(args.output_path, exist_ok=True)
-        run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=args.output_path+'/wandb')
+        
+        if enablewandb:
+            run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=args.output_path+'/wandb')
+        else:
+            run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=args.output_path+'/wandb', mode="disabled")
 
         # Inform the user of host, and various versions -- useful for debugging issues.
         print("RUN_NAME:", args.run_name)
@@ -644,8 +664,12 @@ def main():
         print("RESOLUTION:", args.resolution)
 
     if args.hf_token is None:
-        args.hf_token = os.environ['HF_API_TOKEN']
-        print('It is recommended to set the HF_API_TOKEN environment variable instead of passing it as a command line argument since WandB will automatically log it.')
+        try:
+            args.hf_token = os.environ['HF_API_TOKEN']
+            print('It is recommended to set the HF_API_TOKEN environment variable instead of passing it as a command line argument since WandB will automatically log it.')
+        except Exception:
+            print("No HF Token detected in arguments or enviroment variable, setting it to none (as in string)")
+            args.hf_token = "none"
 
     device = torch.device('cuda')
 
@@ -666,13 +690,13 @@ def main():
     vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token)
     unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token)
 
+    #Move the models before initializing the optimizer
     weight_dtype = torch.float16 if args.fp16 else torch.float32
 
     # move models to device
     vae = vae.to(device, dtype=weight_dtype)
     unet = unet.to(device, dtype=torch.float32)
     text_encoder = text_encoder.to(device, dtype=weight_dtype)
-    # do this BEFORE initializing the optimizer
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -680,6 +704,9 @@ def main():
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
+    
+    if args.use_xformers:
+        unet.set_use_memory_efficient_attention_xformers(True)
 
     if args.use_8bit_adam: # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
         try:
@@ -706,27 +733,31 @@ def main():
         num_train_timesteps=1000,
     )
 
-    #Commenting this out because we are going to reload it constantly
+    #TODO: put arguments
+    def trainDataloader():
+        # load dataset
+        if enablehivemind:
+            store = ImageStore(directoryToExtract)
+        else:
+            store = ImageStore(args.dataset)
+        dataset = AspectDataset(store, tokenizer)
+        bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
+        sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
 
-    # load dataset
+        print(f'STORE_LEN: {len(store)}')
 
-    # store = ImageStore(args.dataset)
-    # dataset = AspectDataset(store, tokenizer)
-    # bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
-    # sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
+        if args.output_bucket_info:
+            print(bucket.get_bucket_info())
+            exit(0)
 
-    # print(f'STORE_LEN: {len(store)}')
+        train_dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            num_workers=0,
+            collate_fn=dataset.collate_fn
+        )
 
-    # if args.output_bucket_info:
-    #     print(bucket.get_bucket_info())
-    #     exit(0)
-
-    # train_dataloader = torch.utils.data.DataLoader(
-    #     dataset,
-    #     batch_sampler=sampler,
-    #     num_workers=0,
-    #     collate_fn=dataset.collate_fn
-    # )
+        return train_dataloader
 
     #unet = torch.nn.parallel.DistributedDataParallel(unet, device_ids=[rank], output_device=rank, gradient_as_bucket_view=True)
 
@@ -736,14 +767,22 @@ def main():
 
     print(get_gpu_ram())
 
-    # num_steps_per_epoch = len(train_dataloader)
-    # progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
     global_step = 0
 
     if args.resume:
         target_global_step = int(args.resume.split('_')[-1])
         print(f'resuming from {args.resume}...')
 
+    #LR SCHEDULER MOVED TO BE SET IF HIVEMIND DISABLED
+    # lr_scheduler = get_scheduler(
+    #     args.lr_scheduler,
+    #     optimizer=optimizer,
+    #     num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * args.epochs),
+    #     num_training_steps=args.epochs * num_steps_per_epoch,
+    #     #last_epoch=(global_step // num_steps_per_epoch) - 1,
+    # )
+
+    #probably unnecessary but ok
     def gt():
         return(time.time_ns())
 
@@ -763,64 +802,46 @@ def main():
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
-            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}_{str(gt())}')
-            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}_{str(gt())}')
+            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
+            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}')
 
             if args.use_ema:
                 ema_unet.restore(unet.parameters())
         # barrier
         torch.distributed.barrier()
 
-    #start training (infinite) loop
-    if args.hivemind:
-        numberOfEpochs = 1
+    # train!
+
+    if enablehivemind:
+        finalOptimizer = hivemindWorker(optimizer, args.peers)
+        numberOfEpochs = 99999
     else:
         numberOfEpochs = args.epochs
-    
+        #TODO: lr_scheduler does not work with hivemind for some reason
+        lr_scheduler = get_scheduler(
+            args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * numberOfEpochs),
+            num_training_steps=numberOfEpochs * num_steps_per_epoch,
+            #last_epoch=(global_step // num_steps_per_epoch) - 1,
+        )
+        finalOptimizer = optimizer
+
+    counter = 0
+
     try:
         while True:
-            recipt = onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
-
-            #Reload Dataset
-            store = ImageStore(directoryToExtract)
-            dataset = AspectDataset(store, tokenizer)
-            bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
-            sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
-
-            print(f'STORE_LEN: {len(store)}')
-            
-            if args.output_bucket_info:
-                print(bucket.get_bucket_info())
-                exit(0)
-
-            train_dataloader = torch.utils.data.DataLoader(
-                dataset,
-                batch_sampler=sampler,
-                num_workers=0,
-                collate_fn=dataset.collate_fn
-            )
-
-            num_steps_per_epoch = len(train_dataloader)
-            progress_bar = tqdm.tqdm(range(args.epochs * num_steps_per_epoch), desc="Total Steps", leave=False)
-        
-            if args.hivemind:
-                finalOptimizer = hivemindWorker(args.peers, optimizer)
-            else:
-                #TODO: lr_scheduler does not work with hivemind for some reason
-                lr_scheduler = get_scheduler(
-                    args.lr_scheduler,
-                    optimizer=optimizer,
-                    num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * args.epochs),
-                    num_training_steps=args.epochs * num_steps_per_epoch,
-                    #last_epoch=(global_step // num_steps_per_epoch) - 1,
-                )
-                finalOptimizer = optimizer
-
-            # train!
             try:
-                loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
-                #This might need to be changed to 1 if distributed training
                 for epoch in range(numberOfEpochs):
+                    recipt = onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
+
+                    #Reload Dataset
+                    print("Reloading Dataset...")
+                    train_dataloader = trainDataloader()
+                    num_steps_per_epoch = len(train_dataloader)
+                    progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
+
+                    loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
                     unet.train()
                     for _, batch in enumerate(train_dataloader):
                         if args.resume and global_step < target_global_step:
@@ -860,7 +881,7 @@ def main():
                         scaler.scale(loss).backward()
                         scaler.step(finalOptimizer)
                         scaler.update()
-                        if args.hivemind:
+                        if enablehivemind:
                             finalOptimizer.step()
                         else:
                             lr_scheduler.step()
@@ -884,65 +905,102 @@ def main():
                         if rank == 0:
                             progress_bar.update(1)
                             global_step += 1
-                            logs = {
-                                "train/loss": loss.detach().item() / world_size,
-                                "train/epoch": epoch,
-                                "train/step": global_step,
-                                "train/samples_seen": samples_seen,
-                                "perf/rank_samples_per_second": rank_images_per_second,
-                                "perf/global_samples_per_second": world_images_per_second,
-                            }
-                            if args.hivemind != True:
-                                logs["train/lr"] = lr_scheduler.get_last_lr()[0]
+                            if enablehivemind:
+                                logs = {
+                                    "train/loss": loss.detach().item() / world_size,
+                                    "train/epoch": epoch,
+                                    "train/step": global_step,
+                                    "train/samples_seen": samples_seen,
+                                    "perf/rank_samples_per_second": rank_images_per_second,
+                                    "perf/global_samples_per_second": world_images_per_second,
+                                }
+                            else:
+                                logs = {
+                                    "train/loss": loss.detach().item() / world_size,
+                                    "train/lr": lr_scheduler.get_last_lr()[0],
+                                    "train/epoch": epoch,
+                                    "train/step": global_step,
+                                    "train/samples_seen": samples_seen,
+                                    "perf/rank_samples_per_second": rank_images_per_second,
+                                    "perf/global_samples_per_second": world_images_per_second,
+                                }
                             progress_bar.set_postfix(logs)
                             run.log(logs, step=global_step)
 
                         if global_step % args.save_steps == 0:
                             save_checkpoint(global_step)
 
-                        if global_step % args.image_log_steps == 0:
-                            if rank == 0:
-                                # get prompt from random batch
-                                prompt = tokenizer.decode(batch['input_ids'][random.randint(0, len(batch['input_ids'])-1)].tolist())
+                        if enableinference:
+                            if global_step % args.image_log_steps == 0:
+                                if rank == 0:
+                                    # get prompt from random batch
+                                    prompt = tokenizer.decode(batch['input_ids'][random.randint(0, len(batch['input_ids'])-1)].tolist())
 
-                                if args.image_log_scheduler == 'DDIMScheduler':
-                                    print('using DDIMScheduler scheduler')
-                                    scheduler = DDIMScheduler(
-                                        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear"
-                                    )
-                                else:
-                                    print('using PNDMScheduler scheduler')
-                                    scheduler=PNDMScheduler(
-                                        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
-                                    )
+                                    if args.image_log_scheduler == 'DDIMScheduler':
+                                        print('using DDIMScheduler scheduler')
+                                        scheduler = DDIMScheduler(
+                                            beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear"
+                                        )
+                                    else:
+                                        print('using PNDMScheduler scheduler')
+                                        scheduler=PNDMScheduler(
+                                            beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
+                                        )
 
-                                pipeline = StableDiffusionPipeline(
-                                    text_encoder=text_encoder,
-                                    vae=vae,
-                                    unet=unet,
-                                    tokenizer=tokenizer,
-                                    scheduler=scheduler,
-                                    safety_checker=None, # disable safety checker to save memory
-                                    feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
-                                ).to(device)
-                                # inference
-                                images = []
-                                with torch.no_grad():
-                                    with torch.autocast('cuda', enabled=args.fp16):
-                                        for _ in range(args.image_log_amount):
-                                            images.append(
-                                                wandb.Image(pipeline(
-                                                    prompt, num_inference_steps=args.image_log_inference_steps
-                                                ).images[0],
-                                                caption=prompt)
-                                            )
-                                # log images under single caption
-                                run.log({'images': images}, step=global_step)
+                                    pipeline = StableDiffusionPipeline(
+                                        text_encoder=text_encoder,
+                                        vae=vae,
+                                        unet=unet,
+                                        tokenizer=tokenizer,
+                                        scheduler=scheduler,
+                                        safety_checker=None, # disable safety checker to save memory
+                                        feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                                    ).to(device)
+                                    # inference
+                                    if enablewandb:
+                                        images = []
+                                    else:
+                                        saveInferencePath = args.output_path + "/inference"
+                                        os.makedirs(saveInferencePath, exist_ok=True)
+                                    with torch.no_grad():
+                                        with torch.autocast('cuda', enabled=args.fp16):
+                                            for _ in range(args.image_log_amount):
+                                                if enablewandb:
+                                                    images.append(
+                                                        wandb.Image(pipeline(
+                                                            prompt, num_inference_steps=args.image_log_inference_steps
+                                                        ).images[0],
+                                                        caption=prompt)
+                                                    )
+                                                else:
+                                                    from datetime import datetime
+                                                    images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps).images[0]
+                                                    filenameImg = str(time.time_ns()) + ".png"
+                                                    filenameTxt = str(time.time_ns()) + ".txt"
+                                                    images.save(saveInferencePath + "/" + filenameImg)
+                                                    with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
+                                                        f.write('Used prompt: ' + prompt + '\n')
+                                                        f.write('Generated Image Filename: ' + filenameImg + '\n')
+                                                        f.write('Generated at: ' + str(global_step) + ' steps' + '\n')
+                                                        f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
 
-                                # cleanup so we don't run out of memory
-                                del pipeline
-                                gc.collect()
-                            torch.distributed.barrier()
+                                    # log images under single caption
+                                    if enablewandb:
+                                        run.log({'images': images}, step=global_step)
+
+                                    # cleanup so we don't run out of memory
+                                    del pipeline
+                                    gc.collect()
+                                torch.distributed.barrier()
+                    print('Did one dataset run. Reporting...')
+                    reportStatus = onlineReport(datasetServer=datasetServer, recipt=recipt)
+                    if reportStatus is True:
+                        print("Report Success")
+                    else:
+                        print("Report failed, exiting...")
+                        exit()
+                    print("Cleaning folder...")
+                    shutil.rmtree(workingDirectory + "/tmp")
             except Exception as e:
                 print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
                 pass
@@ -953,14 +1011,6 @@ def main():
             cleanup()
 
             print(get_gpu_ram())
-            print('Did one dataset run.')
-            print('Reporting...')
-            reportStatus = onlineReport(datasetServer=datasetServer, recipt=recipt)
-            if reportStatus is True:
-                print("Report Success")
-            else:
-                print("Report failed, exiting")
-                exit()
     except KeyboardInterrupt:
         print("Quitting...")
         print("Saving checkpoint...")
