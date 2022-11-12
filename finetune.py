@@ -55,7 +55,7 @@ parser = argparse.ArgumentParser(description='Stable Diffusion Finetuner')
 parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
 parser.add_argument('--resume', type=str, default=None, help='The path to the checkpoint to resume from. If not specified, will create a new run.')
 parser.add_argument('--run_name', type=str, default=None, required=True, help='Name of the finetune run.')
-parser.add_argument('--dataset', type=str, default=None, required=False, help='The path to the dataset to use for finetuning.')
+#parser.add_argument('--dataset', type=str, default=None, required=True, help='The path to the dataset to use for finetuning.')
 parser.add_argument('--num_buckets', type=int, default=16, help='The number of buckets.')
 parser.add_argument('--bucket_side_min', type=int, default=256, help='The minimum side length of a bucket.')
 parser.add_argument('--bucket_side_max', type=int, default=768, help='The maximum side length of a bucket.')
@@ -92,12 +92,12 @@ parser.add_argument('--use_xformers', type=str, default='False', help='Use memor
 parser.add_argument('--wandb', dest='enablewandb', type=str, default='False', help='Enable WeightsAndBiases Reporting')
 parser.add_argument('--inference', dest='enableinference', type=str, default='False', help='Enable Inference during training (Consumes 2GB of VRAM)')
 #Hivemind only
-parser.add_argument('--hivemind', dest='enablehivemind', type=str, default='False', help='Enable Hivemind usage')
+#parser.add_argument('--hivemind', dest='enablehivemind', type=str, default='True', help='Enable Hivemind usage)')
 parser.add_argument('--peers', type=str, default=None, nargs="*", help='MUST BE PASSED AS A LIST! ex.: --peers /ipv4/1.1.1.1 /ipv4/2.2.2.2 | Multiaddrs of one or more active DHT peers. If none it will start a new session.')
 #Dataset server
 parser.add_argument('--datasetserver', type=str, dest='datasetserver', default=None, help='Address of dataset server')
 parser.add_argument('--wantedimages', type=int, dest='wantedimages', default=None, help='Number of wanted images')
-parser.add_argument('--workingdirectory', type=str, dest='workingdirectory', default="distrdata", help='Folder where the downloader is going to do its work')
+parser.add_argument('--workingdirectory', type=str, dest='workingdirectory', default="distributed_data", help='Folder where the downloader is going to do its work')
 
 args = parser.parse_args()
 
@@ -159,16 +159,19 @@ def get_gpu_ram() -> str:
            f"{gpu_str}" \
            f"{torch_str}"
 
-if args.enablehivemind:
-    workingDirectory = args.workingdirectory
-    print("Warning, working folder will be cleared in 10 seconds")
+datasetServer = args.datasetserver
+wantedImages = args.wantedimages
+workingDirectory = args.workingdirectory
+
+if os.path.exists(workingDirectory + "/tmp"):
+    print("Warning, tmp folder will be cleared in 10 secs")
     time.sleep(10)
-    shutil.rmtree(workingDirectory)
-    datasetServer = args.datasetserver
-    wantedImages = args.wantedimages
-    if datasetServer is None:
-        print("No dataset server chosen.")
-        datasetServer = str(input("Dataset server : "))
+    shutil.rmtree(workingDirectory + "/tmp")
+
+if datasetServer is None:
+    print("No dataset server chosen.")
+    datasetServer = str(input("Dataset Server: "))
+else:
     print("Dataset server is: " + datasetServer)
     if wantedImages is None:
         wantedImages = int(input("How many images to download each time?: "))
@@ -187,45 +190,48 @@ if args.enablehivemind:
         print("Unable to get server info")
         exit()
 
-    directoryToExtract = workingDirectory + "/tmp/dataset"
 
-    os.makedirs(workingDirectory, exist_ok=True)
+directoryToExtract = workingDirectory + "/tmp/dataset"
+print("directoryToExtract: " + directoryToExtract)
+print("Wokring: " + workingDirectory)
 
-    def onlineGather(datasetServer, wantedImages, directoryToExtract):
-        #ex.: datasetServer = "127.0.0.1" assuming port is 80
-        print("Dataset server is: " + str(datasetServer))
-        #Info on how this works should be on a md file soon
-        urlDomain = 'http://' + datasetServer
-        urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
-        requestGetTasks = requests.get(urlGetTasks)
-        responseAsJson = requestGetTasks.json()
+os.makedirs(workingDirectory, exist_ok=True)
 
-        print("Downloading Files...")
-        postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
-        #TODO: fix memory file
-        #print("Saving as BytesIO")
-        #memory_file = BytesIO()
-        tmpZipFilename = workingDirectory + "/tmp.zip"
-        open(tmpZipFilename, 'wb').write(postDownloadFiles.content)
-        #memory_file.seek(0)
-        print("Unzipping...")
-        with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
-            print("Extracting to: " + directoryToExtract)
-            zip_ref.extractall(directoryToExtract)
-        print("Extracted")
-        os.remove(tmpZipFilename)
-        responseRecipt = responseAsJson
-        return(responseRecipt)
+def onlineGather(datasetServer, wantedImages, directoryToExtract):
+    #ex.: datasetServer = "127.0.0.1" assuming port is 80
+    print("Dataset server is: " + str(datasetServer))
+    #Info on how this works should be on a md file soon
+    urlDomain = 'http://' + datasetServer
+    urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
+    requestGetTasks = requests.get(urlGetTasks)
+    responseAsJson = requestGetTasks.json()
 
-    def onlineReport(datasetServer, recipt):
-        print("Reporting epoch completition...")
-        urlDomain = 'http://' + datasetServer
-        urlReport = urlDomain + '/v1/post/epochcount'
-        postReportEpoch = requests.post(urlReport, json=recipt)
-        if postReportEpoch.status_code == 200:
-            return True
-        else:
-            return False
+    print("Downloading Files...")
+    postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
+    #TODO: fix memory file
+    #print("Saving as BytesIO")
+    #memory_file = BytesIO()
+    tmpZipFilename = workingDirectory + "/tmp.zip"
+    open(tmpZipFilename, 'wb').write(postDownloadFiles.content)
+    #memory_file.seek(0)
+    print("Unzipping...")
+    with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
+        print("Extracting to: " + directoryToExtract)
+        zip_ref.extractall(directoryToExtract)
+    print("Extracted")
+    os.remove(tmpZipFilename)
+    responseRecipt = responseAsJson
+    return(responseRecipt)
+
+def onlineReport(datasetServer, recipt):
+    print("Reporting epoch completition...")
+    urlDomain = 'http://' + datasetServer
+    urlReport = urlDomain + '/v1/post/epochcount'
+    postReportEpoch = requests.post(urlReport, json=recipt)
+    if postReportEpoch.status_code == 200:
+        return True
+    else:
+        return False
 
 def _sort_by_ratio(bucket: tuple) -> float:
     return bucket[0] / bucket[1]
@@ -644,7 +650,6 @@ def main():
 
     enablewandb = args.enablewandb
     enableinference = args.enableinference
-    enablehivemind = args.enablehivemind
 
     if rank == 0:
         os.makedirs(args.output_path, exist_ok=True)
@@ -711,6 +716,7 @@ def main():
         unet.set_use_memory_efficient_attention_xformers(True)
 
     if args.use_8bit_adam: # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
+        # if str2optimizer8bit_blockwise check https://github.com/TimDettmers/bitsandbytes/issues/62
         try:
             import bitsandbytes as bnb
             optimizer_cls = bnb.optim.AdamW8bit
@@ -738,14 +744,7 @@ def main():
     #TODO: put arguments
     def trainDataloader():
         # load dataset
-        if enablehivemind:
-            store = ImageStore(directoryToExtract)
-        else:
-            if args.dataset is None:
-                print("Dataset flag cannot be none if using local training")
-                exit()
-            else:
-                store = ImageStore(args.dataset)
+        store = ImageStore(directoryToExtract)
         dataset = AspectDataset(store, tokenizer)
         bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
         sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
@@ -818,41 +817,21 @@ def main():
 
     # train!
 
-    if enablehivemind:
-        finalOptimizer = hivemindWorker(optimizer, args.peers)
-        #infinite epochs
-        numberOfEpochs = 99999999999
-    else:
-        numberOfEpochs = args.epochs
-        #TODO: lr_scheduler does not work with hivemind for some reason
-        lr_scheduler = get_scheduler(
-            args.lr_scheduler,
-            optimizer=optimizer,
-            num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * numberOfEpochs),
-            num_training_steps=numberOfEpochs * num_steps_per_epoch,
-            #last_epoch=(global_step // num_steps_per_epoch) - 1,
-        )
-        finalOptimizer = optimizer
-        train_dataloader = trainDataloader()
-        num_steps_per_epoch = len(train_dataloader)
-        progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
+    #forget about local training, use WD instead
+    finalOptimizer = hivemindWorker(optimizer, args.peers)
+    datasetRunCount = 0
 
     try:
-        if enablehivemind is not True:
+        while True:
+            recipt = onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
+
+            #Reload Dataset
+            print("Reloading Dataset...")
+            train_dataloader = trainDataloader()
+            num_steps_per_epoch = len(train_dataloader)
+            progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
+
             loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
-        for epoch in range(numberOfEpochs):
-            if enablehivemind:
-                print("Reminder: Perform a KeyboardInterrupt to exit (CTRL-C)")
-                recipt = onlineGather(datasetServer=datasetServer, wantedImages=wantedImages, directoryToExtract=directoryToExtract)
-
-                #Reload Dataset
-                print("Reloading Dataset...")
-                train_dataloader = trainDataloader()
-                num_steps_per_epoch = len(train_dataloader)
-                progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
-                loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
-                #TODO: are you sure this is like so?
-
             unet.train()
             for _, batch in enumerate(train_dataloader):
                 if args.resume and global_step < target_global_step:
@@ -892,10 +871,7 @@ def main():
                 scaler.scale(loss).backward()
                 scaler.step(finalOptimizer)
                 scaler.update()
-                if enablehivemind:
-                    finalOptimizer.step()
-                else:
-                    lr_scheduler.step()
+                finalOptimizer.step()
                 finalOptimizer.zero_grad()
 
                 # Update EMA
@@ -918,14 +894,12 @@ def main():
                     global_step += 1
                     logs = {
                         "train/loss": loss.detach().item() / world_size,
-                        "train/epoch": epoch,
+                        "train/datasetRunCount": datasetRunCount,
                         "train/step": global_step,
                         "train/samples_seen": samples_seen,
                         "perf/rank_samples_per_second": rank_images_per_second,
                         "perf/global_samples_per_second": world_images_per_second,
                     }
-                    if enablehivemind is not True:
-                        logs["train/lr"] = lr_scheduler.get_last_lr()[0]
                     progress_bar.set_postfix(logs)
                     run.log(logs, step=global_step)
 
@@ -994,35 +968,23 @@ def main():
                             del pipeline
                             gc.collect()
                         torch.distributed.barrier()
-            if enablehivemind:
-                print('Did one dataset run. Reporting...')
-                reportStatus = onlineReport(datasetServer=datasetServer, recipt=recipt)
-                if reportStatus is True:
-                    print("Report Success")
-                else:
-                    print("Report failed, exiting...")
-                    exit()
-                print("Cleaning folder...")
-                shutil.rmtree(workingDirectory + "/tmp")
+            print('Did one dataset run. Reporting...')
+            reportStatus = onlineReport(datasetServer=datasetServer, recipt=recipt)
+            if reportStatus is True:
+                print("Report Success")
+            else:
+                print("Report failed, exiting...")
+                exit()
+            print("Cleaning folder...")
+            shutil.rmtree(workingDirectory + "/tmp")
     except Exception as e:
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
         pass
     except KeyboardInterrupt:
+        print("Quitting...")
         print("Saving checkpoint...")
         save_checkpoint(global_step)
-        torch.distributed.barrier()
-        cleanup()
-        print(get_gpu_ram())
         print("Checkpoint Saved.")
-    #if the user is not using distributed, assuming the:
-    if enablehivemind is not True:
-        save_checkpoint(global_step)
-
-        torch.distributed.barrier()
-        cleanup()
-
-        print(get_gpu_ram())
-        print('Done!')
 
 if __name__ == "__main__":
     setup()
