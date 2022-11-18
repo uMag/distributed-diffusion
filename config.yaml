@@ -1,0 +1,64 @@
+name: testrun
+hivemind: true
+
+checkpoint:
+  output:
+    output_path: "modeloutput"
+  input:
+    diffusers_path: "wdiffuser"
+
+trainer:
+  seed: 24
+  gradient_checkpointing: true
+  use_xformers: false
+  optimizer:
+    use_8bit_adam: false
+    lr: 5e-6
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_epsilon: 1e-08
+    adam_weight_decay: 1e-2
+  lr_scheduler: 
+    type: cosine
+    warmup: 0.05
+  batch_size: 1
+  epochs: 1
+  unet:
+    precision: fp32
+  vae:
+    precision: fp32
+  text_encoder:
+    precision: fp32
+  latents:
+    precision: fp32
+  n_latents:
+    precision: fp32
+  n_pred:
+    precision: fp32
+
+dataset:
+  path: "hololive_general"
+  buckets:
+    num_buckets: 16
+    bucket_side:
+      min: 256
+      max: 768
+  resolution: 512
+
+# https://pytorch-lightning.readthedocs.io/en/stable/common/trainer.html
+lightning:
+  benchmark: true
+  accelerator: gpu
+  devices: -1
+  auto_select_gpus: true
+  limit_test_batches: 100
+  max_epochs: 100
+  precision: 32
+  gradient_clip_val: 0.0
+  auto_scale_batch_size: false
+  auto_lr_find: false
+  move_metrics_to_cpu:
+
+logger:
+  enable: false
+  wandb_id: YOUR ID GOES HERE
