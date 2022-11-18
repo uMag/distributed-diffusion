@@ -16,6 +16,11 @@ from omegaconf import OmegaConf
 from pytorch_lightning.loggers import wandb
 from pytorch_lightning.strategies import HivemindStrategy
 
+def gt():
+    return(time.time_ns())
+
+logging.basicConfig(filename=("log-" + str(gt()) + ".txt") , encoding='utf-8', level=logging.DEBUG)
+
 #logging functions
 ld = logging.debug
 li = logging.info
@@ -33,8 +38,6 @@ config = OmegaConf.load(pathToConf)
 li('Load Sucess')
 
 ld('Defining functions')
-def gt():
-    return(time.time_ns())
 
 def main():
     torch.manual_seed(config.trainer.seed)

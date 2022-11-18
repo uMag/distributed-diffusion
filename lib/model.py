@@ -138,9 +138,7 @@ class StableDiffusionModel(pl.LightningModule):
         steps_per_second = 1 / seconds_per_step
         images_per_second = self.config.trainer.batch_size * steps_per_second
         ld('Perf Calc End')
-        li('Stats: sec/step, step/sec, img/sec, loss')
-        li(str(seconds_per_step) + " , " + str(steps_per_second), " , " + str(images_per_second) + " , " + str(loss))
-        
+
         #naifu trainer only
         self.log("train_loss", loss)
         self.log("train_steps_per_second", steps_per_second)
@@ -172,7 +170,7 @@ class StableDiffusionModel(pl.LightningModule):
                 li('Import Fail... using standard Adam')
         else:
             optimizer_cls = torch.optim.AdamW
-            li('Import Fail... using standard Adam')
+            li('Using standard Adam')
         # L589 just initiates with the settings        
 
         optimizer = optimizer_cls(
@@ -188,7 +186,7 @@ class StableDiffusionModel(pl.LightningModule):
         # Important Note: To not to be confused with noise scheduler! check L646
 
         #Also known as lr_scheduler
-        self.train_dataloader_len = len(self.train_dataloader)
+        self.train_dataloader_len = len(self.train_dataloader())
         ld('train_dataloader_len: ' + str(self.train_dataloader_len))
 
         scheduler = get_scheduler(
@@ -219,7 +217,7 @@ class StableDiffusionModel(pl.LightningModule):
         pipeline.save_pretrained(self.output_model_path)
         li('Saved')
 
-    def train_dataloder(self):
+    def train_dataloader(self):
         li('Loading Dataset')
 
         ld('Initiating ImageStore')
