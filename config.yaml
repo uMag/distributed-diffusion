@@ -36,6 +36,15 @@ trainer:
   n_pred:
     precision: fp32
 
+depos:
+  enabled: true
+  server:
+    hostname: "127.0.0.1"
+    port: 8080
+    auth: none
+  localcapacity: 300
+  workingdirectory: "./workingdir"
+
 dataset:
   path: "hololive_general"
   buckets:
