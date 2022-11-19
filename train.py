@@ -69,7 +69,7 @@ def main():
                 host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
                 reuse_grad_buffers=True,
                 offload_optimizer=False,
-                initial_peers=args.peers
+                initial_peers=[args.peers]
             )
         )
     else:
