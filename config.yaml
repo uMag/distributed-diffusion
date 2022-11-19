@@ -1,5 +1,6 @@
 name: testrun
 hivemind: true
+use_auth_token: true
 
 checkpoint:
   output:
