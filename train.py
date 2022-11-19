@@ -29,6 +29,8 @@ parser.add_argument('-c', '--config', type=str, required=True, help="Path to the
 parser.add_argument('-p', '--peers', type=str, required=False, default=None, help="Hivemind peers")
 args = parser.parse_args()
 
+print("PEERS: " + args.peers)
+
 pathToConf = args.config
 li('Loading configuration file from ' + str(pathToConf))
 config = OmegaConf.load(pathToConf)
