@@ -9,6 +9,8 @@ from diffusers.optimization import get_scheduler
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from data.engines import ImageStore, AspectBucket, AspectBucketSampler, AspectDataset
 
+from .depos.handler import DeposHandler
+
 #logging functions
 ld = logging.debug
 li = logging.info
@@ -28,6 +30,10 @@ class StableDiffusionModel(pl.LightningModule):
         ld('Init function of StableDiffusionModel class')
         self.config = config
         self.input_model_path = self.config.checkpoint.input.diffusers_path
+
+        ld('Calling server...')
+        self.DeposObject = DeposHandler(self.config)
+
         ld('input_model_path: ' + str(self.input_model_path))
         self.output_model_path = self.config.checkpoint.output.output_path
         ld('output_model_path: ' + str(self.output_model_path))
@@ -186,14 +192,14 @@ class StableDiffusionModel(pl.LightningModule):
         # Important Note: To not to be confused with noise scheduler! check L646
 
         #Also known as lr_scheduler
-        self.train_dataloader_len = len(self.train_dataloader())
+        self.train_dataloader_len = self.config.depos.localcapacity
         ld('train_dataloader_len: ' + str(self.train_dataloader_len))
 
         scheduler = get_scheduler(
             lsc.type,
             optimizer=optimizer,
-            num_warmup_steps=int(float(lsc.warmup) * int(self.train_dataloader_len) * int(self.config.trainer.epochs)), #This part is going to be hardcoded until we get a way to get dataset length
-            num_training_steps=int(int(self.config.trainer.epochs) * int(self.train_dataloader_len))
+            num_warmup_steps=float(lsc.warmup) * int(self.train_dataloader_len) * int(self.config.trainer.epochs), #This part is going to be hardcoded until we get a way to get dataset length
+            num_training_steps=int(self.config.trainer.epochs) * int(self.train_dataloader_len)
         )
         ld('Scheduler Set')
 
@@ -220,8 +226,11 @@ class StableDiffusionModel(pl.LightningModule):
     def train_dataloader(self):
         li('Loading Dataset')
 
+        li('Downloading Dataset')
+        self.recipt, self.datasetPath = self.DeposObject.gather()
+
         ld('Initiating ImageStore')
-        store = ImageStore(self.config.dataset.path)
+        store = ImageStore(self.datasetPath)
         ld('Initiating AspectDataset')
         dataset = AspectDataset(store, self.tokenizer)
         ld('Initiating AspectBucket')
@@ -256,6 +265,11 @@ class StableDiffusionModel(pl.LightningModule):
         )
 
         return(train_dataloader)
+
+    def training_epoch_end(self, outputs):
+        li('Finished Epoch!')
+        self.DeposObject.report(self.recipt)
+
             
     #skipping on_train_start, on_train_batch_end, because they use ema things that I dont use
     #skipping on_load_checkpoint bcuz according to docs we might not use them

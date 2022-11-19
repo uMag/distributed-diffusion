@@ -4,10 +4,7 @@ import argparse
 import time
 import logging
 
-from data.engines import ImageStore, AspectBucket, AspectBucketSampler, AspectDataset
 from lib.model import load_model
-from lib.depos.handler import setup
-
 
 from hivemind import Float16Compression, Uniform8BitQuantization
 from hivemind.compression import SizeAdaptiveCompression
