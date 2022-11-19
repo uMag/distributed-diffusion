@@ -77,6 +77,7 @@ def main():
     trainer = pl.Trainer(
     logger = logger,
     strategy = strategy,
+    reload_dataloaders_every_n_epochs=1,
     **config.lightning
     )
 

@@ -30,6 +30,7 @@ class StableDiffusionModel(pl.LightningModule):
         ld('Init function of StableDiffusionModel class')
         self.config = config
         self.input_model_path = self.config.checkpoint.input.diffusers_path
+        use_auth = self.config.use_auth_token
 
         ld('Calling server...')
         self.DeposObject = DeposHandler(self.config)
@@ -39,13 +40,13 @@ class StableDiffusionModel(pl.LightningModule):
         ld('output_model_path: ' + str(self.output_model_path))
 
         li('Loading tokenizer')
-        self.tokenizer = CLIPTokenizer.from_pretrained(self.input_model_path, subfolder="tokenizer")
+        self.tokenizer = CLIPTokenizer.from_pretrained(self.input_model_path, subfolder="tokenizer", use_auth_token=use_auth)
 
-        self.text_encoder = CLIPTextModel.from_pretrained(self.input_model_path, subfolder='text_encoder') #L721
+        self.text_encoder = CLIPTextModel.from_pretrained(self.input_model_path, subfolder='text_encoder', use_auth_token=use_auth) #L721
         ld('Text Encoder set')
-        self.vae = AutoencoderKL.from_pretrained(self.input_model_path, subfolder='vae')
+        self.vae = AutoencoderKL.from_pretrained(self.input_model_path, subfolder='vae', use_auth_token=use_auth)
         ld('VAE set')
-        self.unet = UNet2DConditionModel.from_pretrained(self.input_model_path, subfolder='unet')
+        self.unet = UNet2DConditionModel.from_pretrained(self.input_model_path, subfolder='unet', use_auth_token=use_auth)
         ld('Unet set')
 
         #Unlike naifu's trainer, diffusers trainer starts a new DDPMScheduler rather than loading it from the model.

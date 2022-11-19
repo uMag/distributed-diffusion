@@ -35,9 +35,9 @@ class DeposHandler():
         httpserver = 'http://' + hostname + ":" + port + "/"
         r_serverinfo = requests.get(httpserver + '/info')
         if r_serverinfo.status_code == 200:
-            li("Connection Success")
+            print("Connection Success")
             data = json.loads(r_serverinfo.text)
-            li("Server: " + data['ServerName'])
+            print("Server: " + data['ServerName'])
             li(data['ServerDescription'])
             li("Server Version: " + data['ServerVersion'])
             li("Currently serving " + str(data['FilesBeingServed']) + " Files")
@@ -50,12 +50,14 @@ class DeposHandler():
         self.tmpdir = tmpdir
 
     def gather(self):
+        print("Gathering tasks...")
         urlGetTasks = self.httpserver + 'v1/get/tasks/' + str(self.imgcap)
         urlGetFiles = self.httpserver + 'v1/get/files'
         ld('urlGetTasks: ' + str(urlGetTasks))
         ld('urlGetFiles: ' + str(urlGetFiles))
 
         r_gettasks = requests.get(urlGetTasks)
+        print("Downloading files...")
         p_downfiles = requests.post(urlGetFiles, json=r_gettasks.json())
         #TODO: don't forget about the memory file
         tmpZipName = os.path.join(self.tmpdir, 'tmp.zip')
@@ -63,16 +65,19 @@ class DeposHandler():
         self.datasetdir = datasetPath
         open(tmpZipName, 'wb').write(p_downfiles.content)
         os.makedirs(self.datasetdir, exist_ok=True)
+        print("Unzipping...")
         with zipfile.ZipFile(tmpZipName, 'r') as z:
             z.extractall(datasetPath)
         os.remove(tmpZipName)
         return(r_gettasks.json(), datasetPath)
 
     def report(self, recipt):
+        print("Reporting tasks...")
         urlReport = self.httpserver + 'v1/post/epochcount'
         p_reportepoch = requests.post(urlReport, json=recipt)
         if p_reportepoch.status_code != 200:
             raise ConnectionError('Failed to report epoch, server failure')
         if os.path.exists(self.datasetdir):
+            print("Clearing dataset...")
             shutil.rmtree(self.datasetdir)
 

@@ -5,7 +5,7 @@ checkpoint:
   output:
     output_path: "modeloutput"
   input:
-    diffusers_path: "wdiffuser"
+    diffusers_path: "runwayml/stable-diffusion-v1-5"
 
 trainer:
   seed: 24
@@ -39,7 +39,7 @@ trainer:
 depos:
   enabled: true
   server:
-    hostname: "127.0.0.1"
+    hostname: "152.70.212.127"
     port: 8080
     auth: none
   localcapacity: 300
