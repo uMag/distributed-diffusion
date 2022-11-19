@@ -29,8 +29,6 @@ parser.add_argument('-c', '--config', type=str, required=True, help="Path to the
 parser.add_argument('-p', '--peers', type=str, required=False, default=None, help="Hivemind peers")
 args = parser.parse_args()
 
-print("PEERS: " + args.peers)
-
 pathToConf = args.config
 li('Loading configuration file from ' + str(pathToConf))
 config = OmegaConf.load(pathToConf)
@@ -58,20 +56,36 @@ def main():
         compression = SizeAdaptiveCompression(
             threshold=2 ** 16 + 1, less=Float16Compression(), greater_equal=Uniform8BitQuantization()
         )
-        strategy = (
-            HivemindStrategy(
-                scheduler_fn=list1[1],
-                grad_compression=compression,
-                state_averaging_compression=compression,
-                target_batch_size=1000,
-                verbose=True,
-                run_id="testrun",
-                host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
-                reuse_grad_buffers=True,
-                offload_optimizer=False,
-                initial_peers=[args.peers]
+        if args.peers is None:
+            strategy = (
+                HivemindStrategy(
+                    scheduler_fn=list1[1],
+                    grad_compression=compression,
+                    state_averaging_compression=compression,
+                    target_batch_size=1000,
+                    verbose=True,
+                    run_id="testrun",
+                    host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
+                    reuse_grad_buffers=True,
+                    offload_optimizer=False,
+                    initial_peers=None
+                )
             )
-        )
+        else:
+            strategy = (
+                HivemindStrategy(
+                    scheduler_fn=list1[1],
+                    grad_compression=compression,
+                    state_averaging_compression=compression,
+                    target_batch_size=1000,
+                    verbose=True,
+                    run_id="testrun",
+                    host_maddrs=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"],
+                    reuse_grad_buffers=True,
+                    offload_optimizer=False,
+                    initial_peers=[args.peers]
+                )
+            )
     else:
         strategy = None
 
