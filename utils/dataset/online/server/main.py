@@ -47,6 +47,9 @@ def dictCreator(input):
         #ignore txt files for now
         if entryExt == ".txt":
             continue
+        if entryExt not in ('.jpg', '.webp', '.png', '.jpeg'):
+            print("Not valid image format")
+            continue
         expectedTxtName = str(entryFilename) + ".txt"
         #TODO: Change input to a proper Path object
         expectedTxtLocation = os.path.join(input + "/" + expectedTxtName)
@@ -69,10 +72,22 @@ def dictCreator(input):
 #directory to the dataset
 dataDir = args.dataset
 filesDict, numberFiles = dictCreator(dataDir)
+peerList = []
 
 app = Flask(__name__)
 
 #current version and info
+@app.route("/")
+def mainsite():
+    info = {
+        "ServerName": args.name,
+        "ServerDescription": args.description,
+        "ServerVersion": version,
+        "FilesBeingServed": numberFiles,
+        "ExecutedAt": execDate
+    }
+    return jsonify(info)
+
 @app.route("/info")
 def getInfo():
     info = {
@@ -83,6 +98,23 @@ def getInfo():
         "ExecutedAt": execDate
     }
     return jsonify(info)
+
+@app.route("/v1/post/peerannounce", methods=['POST'])
+def postpeerannouce():
+    print("Peer is annoucing...")
+    content = request.get_json(force=True)
+    a = content['myMADDRS']
+    for i in range(len(a)):
+        print(a[i])
+        peerList.append(a[i])
+    print("Full peer list:")
+    print(peerList)
+    return(Response(status=200))
+
+@app.route("/v1/get/peers", methods=['GET'])
+def getpeers():
+    print("Peer retrival")
+    return jsonify(peerList)
 
 #getTasksFull
 @app.route("/v1/get/tasks/full")
@@ -99,6 +131,8 @@ def getTasks(wantedTasks):
     actualTime = gt()
     timeToExpire = actualTime + (60*setMinutes)
     intWantedTasks = int(wantedTasks) - 1
+    if intWantedTasks > 3000:
+        return(Response(status=404))
     listToReturn = []
     sortedDict = sorted(filesDict.items(), key=lambda x_y: x_y[1]['epochs'])
     obtainedTasks = 0
@@ -122,6 +156,8 @@ def getTasks(wantedTasks):
 def getFiles():
     print("Got request for files!")
     content = request.get_json(force=True)
+    if len(content) > 3000:
+        return(Response(status=404))
     memory_file = BytesIO()
     with ZipFile(memory_file, 'w') as zf:
         for i in range(len(content)):

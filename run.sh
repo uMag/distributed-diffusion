@@ -1,0 +1,25 @@
+torchrun --nproc_per_node=1 \
+	train.py \
+	--workingdirectory hivemindtemp \
+	--wantedimages 500 \
+	--datasetserver="DATASET_SERVER_IP" \
+	--node="true" \
+	--o_port1=LOCAL_TCP_PORT \
+	--o_port2=LOCAL_UDP_PORT \
+	--ip_is_different="true" \
+	--p_ip="PUBLIC_IP" \
+	--p_port1=PUBLIC_TCP_PORT \
+	--p_port2=PUBLIC_UDP_PORT \
+	--batch_size 2 \
+	--use_xformers="true" \
+	--save_steps 1000 \
+	--image_log_steps 400 \
+	--hf_token="YOUR HUGGIGNFACE TOKEN" \
+	--model runwayml/stable-diffusion-v1-5 \
+	--run_name testrun1 \
+	--gradient_checkpointing="true" \
+	--use_8bit_adam="false" \
+	--fp16="true" \
+	--resize="true" \
+	--wandb="false" \
+	--no_migration="true" \
