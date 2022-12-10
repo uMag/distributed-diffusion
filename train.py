@@ -1,12 +1,9 @@
-# Install bitsandbytes:
-# `nvcc --version` to get CUDA version.
-# `pip install -i https://test.pypi.org/simple/ bitsandbytes-cudaXXX` to install for current CUDA.
-# Example Usage:
-# Single GPU: torchrun --nproc_per_node=1 trainer/diffusers_trainer.py --model="CompVis/stable-diffusion-v1-4" --run_name="liminal" --dataset="liminal-dataset" --hf_token="hf_blablabla" --bucket_side_min=64 --use_8bit_adam=True --gradient_checkpointing=True --batch_size=1 --fp16=True --image_log_steps=250 --epochs=20 --resolution=768 --use_ema=True
-# Multiple GPUs: torchrun --nproc_per_node=N trainer/diffusers_trainer.py --model="CompVis/stable-diffusion-v1-4" --run_name="liminal" --dataset="liminal-dataset" --hf_token="hf_blablabla" --bucket_side_min=64 --use_8bit_adam=True --gradient_checkpointing=True --batch_size=10 --fp16=True --image_log_steps=250 --epochs=20 --resolution=768 --use_ema=True
+#python3 train.py -c CONFIGURATION.yaml
 
 import argparse
 import socket
+import sys
+import zipfile
 import torch
 import torchvision
 import transformers
@@ -27,9 +24,11 @@ import json
 import re
 import traceback
 import shutil
-import hivemind
 import requests
-import zipfile
+import hivemind
+import ipaddress
+from typing import Optional
+from functools import reduce
 
 try:
     pynvml.nvmlInit()
@@ -44,92 +43,45 @@ from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 from PIL import Image, ImageOps
 from PIL.Image import Image as Img
 
-from hivemind.compression.quantization import BlockwiseQuantization
-from hivemind import Float16Compression, Uniform8BitQuantization
-from hivemind.compression import SizeAdaptiveCompression
-from hivemind.optim.power_sgd_averager import PowerSGDGradientAverager
-from functools import partial
-
-from typing import Dict, List, Generator, Tuple
-from scipy.interpolate import interp1d
+from typing import Generator, Tuple
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-# defaults should be good for everyone
-# TODO: add custom VAE support. should be simple with diffusers
-bool_t = lambda x: x.lower() in ['true', 'yes', '1']
-parser = argparse.ArgumentParser(description='Stable Diffusion Finetuner')
-parser.add_argument('--model', type=str, default=None, required=True, help='The name of the model to use for finetuning. Could be HuggingFace ID or a directory')
-parser.add_argument('--resume', type=str, default=None, help='The path to the checkpoint to resume from. If not specified, will create a new run.')
-parser.add_argument('--run_name', type=str, default=None, required=True, help='Name of the finetune run.')
-parser.add_argument('--num_buckets', type=int, default=16, help='The number of buckets.')
-parser.add_argument('--bucket_side_min', type=int, default=256, help='The minimum side length of a bucket.')
-parser.add_argument('--bucket_side_max', type=int, default=768, help='The maximum side length of a bucket.')
-parser.add_argument('--lr', type=float, default=5e-6, help='Learning rate')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch size')
-parser.add_argument('--use_ema', type=bool_t, default='False', help='Use EMA for finetuning')
-parser.add_argument('--ucg', type=float, default=0.1, help='Percentage chance of dropping out the text condition per batch. Ranges from 0.0 to 1.0 where 1.0 means 100% text condition dropout.') # 10% dropout probability
-parser.add_argument('--gradient_checkpointing', dest='gradient_checkpointing', type=bool_t, default='False', help='Enable gradient checkpointing')
-parser.add_argument('--use_8bit_adam', dest='use_8bit_adam', type=bool_t, default='False', help='Use 8-bit Adam optimizer')
-parser.add_argument('--adam_beta1', type=float, default=0.9, help='Adam beta1')
-parser.add_argument('--adam_beta2', type=float, default=0.999, help='Adam beta2')
-parser.add_argument('--adam_weight_decay', type=float, default=1e-2, help='Adam weight decay')
-parser.add_argument('--adam_epsilon', type=float, default=1e-08, help='Adam epsilon')
-parser.add_argument('--lr_scheduler', type=str, default='cosine', help='Learning rate scheduler [`cosine`, `linear`, `constant`]')
-parser.add_argument('--lr_scheduler_warmup', type=float, default=0.05, help='Learning rate scheduler warmup steps. This is a percentage of the total number of steps in the training run. 0.1 means 10 percent of the total number of steps.')
-parser.add_argument('--seed', type=int, default=42, help='Seed for random number generator, this is to be used for reproduceability purposes.')
-parser.add_argument('--output_path', type=str, default='./output', help='Root path for all outputs.')
-parser.add_argument('--save_steps', type=int, default=500, help='Number of steps to save checkpoints at.')
-parser.add_argument('--resolution', type=int, default=512, help='Image resolution to train against. Lower res images will be scaled up to this resolution and higher res images will be scaled down.')
-parser.add_argument('--shuffle', dest='shuffle', type=bool_t, default='True', help='Shuffle dataset')
-parser.add_argument('--hf_token', type=str, default=None, required=False, help='A HuggingFace token is needed to download private models for training.')
-parser.add_argument('--project_id', type=str, default='diffusers', help='Project ID for reporting to WandB')
-parser.add_argument('--fp16', dest='fp16', type=bool_t, default='False', help='Train in mixed precision')
-parser.add_argument('--image_log_steps', type=int, default=100, help='Number of steps to log images at.')
-parser.add_argument('--image_log_amount', type=int, default=4, help='Number of images to log every image_log_steps')
-parser.add_argument('--image_log_inference_steps', type=int, default=50, help='Number of inference steps to use to log images.')
-parser.add_argument('--image_log_scheduler', type=str, default="PNDMScheduler", help='Number of inference steps to use to log images.')
-parser.add_argument('--clip_penultimate', type=bool_t, default='False', help='Use penultimate CLIP layer for text embedding')
-parser.add_argument('--output_bucket_info', type=bool_t, default='False', help='Outputs bucket information and exits')
-parser.add_argument('--resize', type=bool_t, default='False', help="Resizes dataset's images to the appropriate bucket dimensions.")
-parser.add_argument('--use_xformers', type=bool_t, default='False', help='Use memory efficient attention')
-parser.add_argument('--wandb', dest='enablewandb', type=bool_t, default='True', help='Enable WeightsAndBiases Reporting')
-parser.add_argument('--inference', dest='enableinference', type=bool_t, default='True', help='Enable Inference during training (Consumes 2GB of VRAM)')
-parser.add_argument('--extended_validation', type=bool_t, default='False', help='Perform extended validation of images to catch truncated or corrupt images.')
-parser.add_argument('--no_migration', type=bool_t, default='False', help='Do not perform migration of dataset while the `--resize` flag is active. Migration creates an adjacent folder to the dataset with <dataset_dirname>_cropped.')
-parser.add_argument('--skip_validation', type=bool_t, default='False', help='Skip validation of images, useful for speeding up loading of very large datasets that have already been validated.')
+from omegaconf import OmegaConf
+from hivemind import Float16Compression
+from threading import Thread
 
-parser.add_argument('--datasetserver', type=str, dest='datasetserver', default=None, help='Address of dataset server')
-parser.add_argument('--wantedimages', type=int, dest='wantedimages', default=None, help='Number of wanted images')
-parser.add_argument('--workingdirectory', type=str, dest='workingdirectory', default="distributed_data", help='Folder where the downloader is going to do its work')
+import logging
 
-parser.add_argument('--node', type=bool_t, dest="node", default="true", help="Become a node or not")
-
-parser.add_argument('--o_port1', type=int, dest="o_port1", default=6969, help="ORIGIN (Internal) Port 1 for Hivemind Server, TCP")
-parser.add_argument('--o_port2', type=int, dest="o_port2", default=42069, help="ORIGIN (Internal) Port 2 for Hivemind Server, UDP")
-
-parser.add_argument('--ip_is_different', type=bool_t, default="true", help="set this to true if your instance is behind a NAT or has a different PUBLIC IP than the one thats provided by default")
-#if true, then:
-parser.add_argument('--p_ip', type=str, dest="p_ip", help="PUBLIC IP used for hivemind server")
-parser.add_argument('--p_port1', type=int, dest="p_port1", help="PUBLIC port to be used for hivemind server, TCP")
-parser.add_argument('--p_port2', type=int, dest="p_port2", help="PUBLIC port to be used for hivemind server, TCP")
+parser = argparse.ArgumentParser(description="Hivemind Trainer")
+parser.add_argument('-c', '--config', type=str, default="configuration.yaml", required=True, help="Path to the configuration YAML file")
+#TODO: change this to integers
+parser.add_argument('-l', '--loglevel', type=str, default="INFO", help="Loglvel for logging. https://docs.python.org/3/library/logging.html")
 args = parser.parse_args()
 
-def setup():
-    torch.distributed.init_process_group("nccl", init_method="env://")
+logging.basicConfig(level="INFO")
 
-def cleanup():
-    torch.distributed.destroy_process_group()
+conf = OmegaConf.load(args.config)
+temporary_dataset = os.path.join(conf.local.working_path, "dataset")
+cookies = {
+    'nickname': conf.local.iden.nickname
+}
 
-def get_rank() -> int:
-    if not torch.distributed.is_initialized():
-        return 0
-    return torch.distributed.get_rank()
+# def setup():
+#     torch.distributed.init_process_group("nccl", init_method="env://")
 
-def get_world_size() -> int:
-    if not torch.distributed.is_initialized():
-        return 1
-    return torch.distributed.get_world_size()
+# def cleanup():
+#     torch.distributed.destroy_process_group()
+
+# def get_rank() -> int:
+#     if not torch.distributed.is_initialized():
+#         return 0
+#     return torch.distributed.get_rank()
+
+# def get_world_size() -> int:
+#     if not torch.distributed.is_initialized():
+#         return 1
+#     return torch.distributed.get_world_size()
 
 def get_gpu_ram() -> str:
     """
@@ -165,87 +117,6 @@ def get_gpu_ram() -> str:
     return f"CPU: (maxrss: {cpu_maxrss:,}mb F: {cpu_free:,}mb) " \
            f"{gpu_str}" \
            f"{torch_str}"
-
-
-datasetServer = args.datasetserver
-wantedImages = args.wantedimages
-workingDirectory = args.workingdirectory
-
-if os.path.exists(workingDirectory + "/tmp"):
-    print("Warning, tmp folder will be cleared in 10 secs")
-    time.sleep(10)
-    shutil.rmtree(workingDirectory + "/tmp")
-
-if datasetServer is None:
-    print("No dataset server chosen.")
-    datasetServer = str(input("Dataset Server: "))
-else:
-    print("Dataset server is: " + datasetServer)
-    if wantedImages is None:
-        wantedImages = int(input("How many images to download each time?: "))
-    print("Number of images to download each time: " + str(wantedImages))
-    print("Attempting to get server info...")
-    #ex.: datasetServer = 127.0.0.1
-    r = requests.get('http://' + str(datasetServer) + '/info')
-    if r.status_code == 200:
-        data = json.loads(r.text)
-        print("Server: " + data['ServerName'])
-        print(data['ServerDescription'])
-        print("Server Version: " + data['ServerVersion'])
-        print("Currently serving " + str(data['FilesBeingServed']) + " Files")
-        print("Age: " + data['ExecutedAt'])
-    else:
-        raise ConnectionError("Unable to get server info")
-
-
-directoryToExtract = workingDirectory + "/tmp/dataset"
-print("directoryToExtract: " + directoryToExtract)
-print("Wokring: " + workingDirectory)
-
-os.makedirs(workingDirectory, exist_ok=True)
-
-def onlineGather(datasetServer, wantedImages, directoryToExtract):
-    #ex.: datasetServer = "127.0.0.1" assuming port is 80
-    print("Dataset server is: " + str(datasetServer))
-    #Info on how this works should be on a md file soon
-    urlDomain = 'http://' + datasetServer
-    urlGetTasks = urlDomain + '/v1/get/tasks/' + str(wantedImages)
-    requestGetTasks = requests.get(urlGetTasks)
-    responseAsJson = requestGetTasks.json()
-
-    print("Downloading Files...")
-    postDownloadFiles = requests.post(urlDomain + "/v1/get/files", json=responseAsJson)
-    #TODO: fix memory file
-    #print("Saving as BytesIO")
-    #memory_file = BytesIO()
-    tmpZipFilename = workingDirectory + "/tmp.zip"
-    open(tmpZipFilename, 'wb').write(postDownloadFiles.content)
-    #memory_file.seek(0)
-    print("Unzipping...")
-    with zipfile.ZipFile(tmpZipFilename, 'r') as zip_ref:
-        print("Extracting to: " + directoryToExtract)
-        zip_ref.extractall(directoryToExtract)
-    print("Extracted")
-    os.remove(tmpZipFilename)
-    responseRecipt = responseAsJson
-    return(responseRecipt)
-
-def onlineReport(datasetServer, recipt):
-    print("Reporting epoch completition...")
-    urlDomain = 'http://' + datasetServer
-    urlReport = urlDomain + '/v1/post/epochcount'
-    postReportEpoch = requests.post(urlReport, json=recipt)
-    if postReportEpoch.status_code == 200:
-        return True
-    else:
-        return False
-
-
-def _sort_by_ratio(bucket: tuple) -> float:
-    return bucket[0] / bucket[1]
-
-def _sort_by_area(bucket: tuple) -> float:
-    return bucket[0] * bucket[1]
 
 class Validation():
     def __init__(self, is_skipped: bool, is_extended: bool) -> None:
@@ -293,7 +164,7 @@ class Resize():
 
         if not is_not_migrating:
             self.resize = self.__migration
-            dataset_path = os.path.split(directoryToExtract)
+            dataset_path = os.path.split(temporary_dataset)
             self.__directory = os.path.join(
                 dataset_path[0],
                 f'{dataset_path[1]}_cropped'
@@ -330,7 +201,7 @@ class Resize():
 
         try:
             shutil.copy(
-                os.path.join(args.dataset, f'{filename}.txt'),
+                os.path.join(temporary_dataset, f'{filename}.txt'),
                 os.path.join(self.__directory, f'{filename}.txt'),
                 follow_symlinks=False
             )
@@ -355,11 +226,11 @@ class ImageStore:
         [self.image_files.extend(glob.glob(f'{data_dir}' + '/*.' + e)) for e in ['jpg', 'jpeg', 'png', 'bmp', 'webp']]
 
         self.validator = Validation(
-            args.skip_validation,
-            args.extended_validation
+            conf.local.image_store.skip,
+            conf.local.image_store.extended
         ).validate
 
-        self.resizer = Resize(args.resize, args.no_migration).resize
+        self.resizer = Resize(conf.local.image_store.resize, conf.local.image_store.no_migration).resize
 
         self.image_files = [x for x in self.image_files if self.validator(x)]
 
@@ -367,9 +238,9 @@ class ImageStore:
         return len(self.image_files)
 
     # iterator returns images as PIL images and their index in the store
-    def entries_iterator(self) -> Generator[Tuple[Img, int], None, None]:
-        for f in range(len(self)):
-            yield Image.open(self.image_files[f]), f
+    def __iter__(self) -> Generator[Tuple[Img, int], None, None]:
+        for i, f in enumerate(self.image_files):
+            yield Image.open(f), i
 
     # get image by index
     def get_image(self, ref: Tuple[int, int, int]) -> Img:
@@ -385,211 +256,148 @@ class ImageStore:
         with open(filename, 'r', encoding='UTF-8') as f:
             return f.read()
 
-
-# ====================================== #
-# Bucketing code stolen from hasuwoof:   #
-# https://github.com/hasuwoof/huskystack #
-# ====================================== #
-
-class AspectBucket:
-    def __init__(self, store: ImageStore,
-                 num_buckets: int,
-                 batch_size: int,
-                 bucket_side_min: int = 256,
-                 bucket_side_max: int = 768,
-                 bucket_side_increment: int = 64,
-                 max_image_area: int = 512 * 768,
-                 max_ratio: float = 2):
-
-        self.requested_bucket_count = num_buckets
-        self.bucket_length_min = bucket_side_min
-        self.bucket_length_max = bucket_side_max
-        self.bucket_increment = bucket_side_increment
-        self.max_image_area = max_image_area
-        self.batch_size = batch_size
-        self.total_dropped = 0
-
-        if max_ratio <= 0:
-            self.max_ratio = float('inf')
-        else:
-            self.max_ratio = max_ratio
-
-        self.store = store
-        self.buckets = []
-        self._bucket_ratios = []
-        self._bucket_interp = None
-        self.bucket_data: Dict[tuple, List[int]] = dict()
-        self.init_buckets()
-        self.fill_buckets()
-
-    def init_buckets(self):
-        possible_lengths = list(range(self.bucket_length_min, self.bucket_length_max + 1, self.bucket_increment))
-        possible_buckets = list((w, h) for w, h in itertools.product(possible_lengths, possible_lengths)
-                        if w >= h and w * h <= self.max_image_area and w / h <= self.max_ratio)
-
-        buckets_by_ratio = {}
-
-        # group the buckets by their aspect ratios
-        for bucket in possible_buckets:
-            w, h = bucket
-            # use precision to avoid spooky floats messing up your day
-            ratio = '{:.4e}'.format(w / h)
-
-            if ratio not in buckets_by_ratio:
-                group = set()
-                buckets_by_ratio[ratio] = group
-            else:
-                group = buckets_by_ratio[ratio]
-
-            group.add(bucket)
-
-        # now we take the list of buckets we generated and pick the largest by area for each (the first sorted)
-        # then we put all of those in a list, sorted by the aspect ratio
-        # the square bucket (LxL) will be the first
-        unique_ratio_buckets = sorted([sorted(buckets, key=_sort_by_area)[-1]
-                                       for buckets in buckets_by_ratio.values()], key=_sort_by_ratio)
-
-        # how many buckets to create for each side of the distribution
-        bucket_count_each = int(np.clip((self.requested_bucket_count + 1) / 2, 1, len(unique_ratio_buckets)))
-
-        # we know that the requested_bucket_count must be an odd number, so the indices we calculate
-        # will include the square bucket and some linearly spaced buckets along the distribution
-        indices = {*np.linspace(0, len(unique_ratio_buckets) - 1, bucket_count_each, dtype=int)}
-
-        # make the buckets, make sure they are unique (to remove the duplicated square bucket), and sort them by ratio
-        # here we add the portrait buckets by reversing the dimensions of the landscape buckets we generated above
-        buckets = sorted({*(unique_ratio_buckets[i] for i in indices),
-                          *(tuple(reversed(unique_ratio_buckets[i])) for i in indices)}, key=_sort_by_ratio)
-
-        self.buckets = buckets
-
-        # cache the bucket ratios and the interpolator that will be used for calculating the best bucket later
-        # the interpolator makes a 1d piecewise interpolation where the input (x-axis) is the bucket ratio,
-        # and the output is the bucket index in the self.buckets array
-        # to find the best fit we can just round that number to get the index
-        self._bucket_ratios = [w / h for w, h in buckets]
-        self._bucket_interp = interp1d(self._bucket_ratios, list(range(len(buckets))), assume_sorted=True,
-                                       fill_value=None)
-
-        for b in buckets:
-            self.bucket_data[b] = []
-
-    def get_batch_count(self):
-        return sum(len(b) // self.batch_size for b in self.bucket_data.values())
-
-    def get_bucket_info(self):
-        return json.dumps({ "buckets": self.buckets, "bucket_ratios": self._bucket_ratios })
-
-    def get_batch_iterator(self) -> Generator[Tuple[Tuple[int, int, int]], None, None]:
-        """
-        Generator that provides batches where the images in a batch fall on the same bucket
-
-        Each element generated will be:
-            (index, w, h)
-
-        where each image is an index into the dataset
-        :return:
-        """
-        max_bucket_len = max(len(b) for b in self.bucket_data.values())
-        index_schedule = list(range(max_bucket_len))
-        random.shuffle(index_schedule)
-
-        bucket_len_table = {
-            b: len(self.bucket_data[b]) for b in self.buckets
-        }
-
-        bucket_schedule = []
-        for i, b in enumerate(self.buckets):
-            bucket_schedule.extend([i] * (bucket_len_table[b] // self.batch_size))
-
-        random.shuffle(bucket_schedule)
-
-        bucket_pos = {
-            b: 0 for b in self.buckets
-        }
-
-        total_generated_by_bucket = {
-            b: 0 for b in self.buckets
-        }
-
-        for bucket_index in bucket_schedule:
-            b = self.buckets[bucket_index]
-            i = bucket_pos[b]
-            bucket_len = bucket_len_table[b]
-
-            batch = []
-            while len(batch) != self.batch_size:
-                # advance in the schedule until we find an index that is contained in the bucket
-                k = index_schedule[i]
-                if k < bucket_len:
-                    entry = self.bucket_data[b][k]
-                    batch.append(entry)
-
-                i += 1
-
-            total_generated_by_bucket[b] += self.batch_size
-            bucket_pos[b] = i
-            yield [(idx, *b) for idx in batch]
-
-    def fill_buckets(self):
-        entries = self.store.entries_iterator()
-        total_dropped = 0
-
-        for entry, index in tqdm.tqdm(entries, total=len(self.store)):
-            if not self._process_entry(entry, index):
-                total_dropped += 1
-
-        for b, values in self.bucket_data.items():
-            # shuffle the entries for extra randomness and to make sure dropped elements are also random
-            random.shuffle(values)
-
-            # make sure the buckets have an exact number of elements for the batch
-            to_drop = len(values) % self.batch_size
-            self.bucket_data[b] = list(values[:len(values) - to_drop])
-            total_dropped += to_drop
-
-        self.total_dropped = total_dropped
-
-    def _process_entry(self, entry: Image.Image, index: int) -> bool:
-        aspect = entry.width / entry.height
-
-        if aspect > self.max_ratio or (1 / aspect) > self.max_ratio:
-            return False
-
-        best_bucket = self._bucket_interp(aspect)
-
-        if best_bucket is None:
-            return False
-
-        bucket = self.buckets[round(float(best_bucket))]
-
-        self.bucket_data[bucket].append(index)
-
-        del entry
-
-        return True
-
-class AspectBucketSampler(torch.utils.data.Sampler):
-    def __init__(self, bucket: AspectBucket, num_replicas: int = 1, rank: int = 0):
+# for confused questions <contact@lopho.org>
+# or via discord <lopho#5445>
+class SimpleBucket(torch.utils.data.Sampler):
+    """
+    Batches samples into buckets of same size.
+    """
+    def __init__(self,
+            store: ImageStore,
+            batch_size: int,
+            shuffle: bool = True,
+            num_replicas: int = 1,
+            rank: int = 0,
+            resize: bool = False,
+            image_side_divisor: int = 64,
+            max_image_area: int = 512 ** 2,
+            image_side_min: Optional[int] = None,
+            image_side_max: Optional[int] = None,
+            fixed_size: Optional[tuple[int, int]] = None
+    ):
         super().__init__(None)
-        self.bucket = bucket
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.store = store
+        self.buckets = dict()
+        self.ratios = []
+        if resize:
+            m = image_side_divisor
+            assert (max_image_area // m) == max_image_area / m, "resolution not multiple of divisor"
+            if image_side_max is not None:
+                assert (image_side_max // m) == image_side_max / m, "side not multiple of divisor"
+            if image_side_min is not None:
+                assert (image_side_min // m) == image_side_min / m, "side not multiple of divisor"
+            if fixed_size is not None:
+                assert (fixed_size[0] // m) == fixed_size[0] / m, "side not multiple of divisor"
+                assert (fixed_size[1] // m) == fixed_size[1] / m, "side not multiple of divisor"
+            if image_side_min is None:
+                if image_side_max is None:
+                    image_side_min = m
+                else:
+                    image_side_min = max((max_image_area // image_side_max) * m, m)
+            if image_side_max is None:
+                image_side_max = max((max_image_area // image_side_min) * m, m)
+            self.fixed_size = fixed_size
+            self.image_side_min = image_side_min
+            self.image_side_max = image_side_max
+            self.image_side_divisor = image_side_divisor
+            self.max_image_area = max_image_area
+        self.dropped_samples = []
+        self.init_buckets(resize)
         self.num_replicas = num_replicas
         self.rank = rank
 
     def __iter__(self):
-        # subsample the bucket to only include the elements that are assigned to this rank
-        indices = self.bucket.get_batch_iterator()
-        indices = list(indices)[self.rank::self.num_replicas]
-        return iter(indices)
+        # generate batches
+        batches = []
+        for b in self.buckets:
+            idxs = self.buckets[b]
+            if self.shuffle:
+                random.shuffle(idxs)
+            rest = len(idxs) % self.batch_size
+            idxs = idxs[rest:]
+            batched_idxs = [idxs[i:i + self.batch_size] for i in range(0, len(idxs), self.batch_size)]
+            for bidx in batched_idxs:
+                batches.append([(idx, b[0], b[1]) for idx in bidx])
+        if self.shuffle:
+            random.shuffle(batches)
+        return iter(batches[self.rank::self.num_replicas])
 
     def __len__(self):
-        return self.bucket.get_batch_count() // self.num_replicas
+        return self.get_batch_count() // self.num_replicas
+
+    def get_batch_count(self) -> int:
+        return reduce(lambda x, y: x + len(y) // self.batch_size, self.buckets.values(), 0)
+
+    def _fit_image_size(self, w, h):
+        if self.fixed_size is not None:
+            return self.fixed_size
+        max_area = self.max_image_area
+        scale = (max_area / (w * h)) ** 0.5
+        m = self.image_side_divisor
+        w2 = round((w * scale) / m) * m
+        h2 = round((h * scale) / m) * m
+        if w2 * h2 > max_area: # top end can round over limits
+            w = int((w * scale) / m) * m
+            h = int((h * scale) / m) * m
+        else:
+            w = w2
+            h = h2
+        w = min(max(w, self.image_side_min), self.image_side_max)
+        h = min(max(h, self.image_side_min), self.image_side_max)
+        return w, h
+
+    def init_buckets(self, resize = False):
+        # create buckets
+        buckets = {}
+        for img, idx in tqdm.tqdm(self.store, desc='Bucketing', dynamic_ncols=True):
+            key = img.size
+            img.close()
+            if resize:
+                key = self._fit_image_size(*key)
+            buckets.setdefault(key, []).append(idx)
+        # fit buckets < batch_size in closest bucket if resizing is enabled
+        if resize:
+            for b in buckets:
+                if len(buckets[b]) < self.batch_size:
+                    # find closest bucket
+                    best_fit = float('inf')
+                    best_bucket = None
+                    for ob in buckets:
+                        if ob == b or len(buckets[ob]) == 0:
+                            continue
+                        d = abs(ob[0] - b[0]) + abs(ob[1] - b[1])
+                        if d < best_fit:
+                            best_fit = d
+                            best_bucket = ob
+                    if best_bucket is not None:
+                        buckets[best_bucket].extend(buckets[b])
+                        buckets[b].clear()
+        # drop buckets < batch_size
+        for b in list(buckets.keys()):
+            if len(buckets[b]) < self.batch_size:
+                self.dropped_samples += buckets.pop(b)
+            else:
+                self.ratios.append(b[0] / b[1])
+        self.buckets = buckets
+
+    def get_bucket_info(self):
+        return json.dumps({
+                "buckets": list(self.buckets.keys()),
+                "ratios": self.ratios
+        })
 
 class AspectDataset(torch.utils.data.Dataset):
-    def __init__(self, store: ImageStore, tokenizer: CLIPTokenizer, ucg: float = 0.1):
+    def __init__(self, store: ImageStore, tokenizer: CLIPTokenizer, text_encoder: CLIPTextModel, device: torch.device, ucg: float = 0.1):
         self.store = store
         self.tokenizer = tokenizer
+        self.text_encoder = text_encoder
+        self.device = device
         self.ucg = ucg
+
+        #if type(self.text_encoder) is torch.nn.parallel.DistributedDataParallel:
+        #    self.text_encoder = self.text_encoder.module
 
         self.transforms = torchvision.transforms.Compose([
             torchvision.transforms.RandomHorizontalFlip(p=0.5),
@@ -610,19 +418,70 @@ class AspectDataset(torch.utils.data.Dataset):
             caption_file = self.store.get_caption(item)
         else:
             caption_file = ''
-        return_dict['input_ids'] = self.tokenizer(caption_file, max_length=self.tokenizer.model_max_length, padding='do_not_pad', truncation=True).input_ids
 
+        return_dict['input_ids'] = caption_file
         return return_dict
 
     def collate_fn(self, examples):
             pixel_values = torch.stack([example['pixel_values'] for example in examples if example is not None])
             pixel_values.to(memory_format=torch.contiguous_format).float()
-            input_ids = [example['input_ids'] for example in examples if example is not None]
-            padded_tokens = self.tokenizer.pad({'input_ids': input_ids}, return_tensors='pt', padding=True)
+
+            if conf.everyone.extended_chunks < 2:
+                max_length = self.tokenizer.model_max_length - 2
+                input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False, add_special_tokens=False, max_length=max_length).input_ids for example in examples if example is not None]
+            else:
+                max_length = self.tokenizer.model_max_length
+                max_chunks = conf.everyone.extended_chunks
+                input_ids = [self.tokenizer([example['input_ids']], truncation=True, return_length=True, return_overflowing_tokens=False, padding=False, add_special_tokens=False, max_length=(max_length * max_chunks) - (max_chunks * 2)).input_ids[0] for example in examples if example is not None]
+
+            tokens = input_ids
+
+            if conf.everyone.extended_chunks < 2:
+                for i, x in enumerate(input_ids):
+                    for j, y in enumerate(x):
+                        input_ids[i][j] = [self.tokenizer.bos_token_id, *y, *np.full((self.tokenizer.model_max_length - len(y) - 1), self.tokenizer.eos_token_id)]
+
+                if conf.everyone.clip_penultimate:
+                    input_ids = [self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_id).to(self.device), output_hidden_states=True)['hidden_states'][-2])[0] for input_id in input_ids]
+                else:
+                    input_ids = [self.text_encoder(torch.asarray(input_id).to(self.device), output_hidden_states=True).last_hidden_state[0] for input_id in input_ids]
+            else:
+                max_standard_tokens = max_length - 2
+                max_chunks = conf.everyone.extended_chunks
+                max_len = np.ceil(max(len(x) for x in input_ids) / max_standard_tokens).astype(int).item() * max_standard_tokens
+                if max_len > max_standard_tokens:
+                    z = None
+                    for i, x in enumerate(input_ids):
+                        if len(x) < max_len:
+                            input_ids[i] = [*x, *np.full((max_len - len(x)), self.tokenizer.eos_token_id)]
+                    batch_t = torch.tensor(input_ids)
+                    chunks = [batch_t[:, i:i + max_standard_tokens] for i in range(0, max_len, max_standard_tokens)]
+                    for chunk in chunks:
+                        chunk = torch.cat((torch.full((chunk.shape[0], 1), self.tokenizer.bos_token_id), chunk, torch.full((chunk.shape[0], 1), self.tokenizer.eos_token_id)), 1)
+                        if z is None:
+                            if conf.everyone.clip_penultimate:
+                                z = self.text_encoder.text_model.final_layer_norm(self.text_encoder(chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])
+                            else:
+                                z = self.text_encoder(chunk.to(self.device), output_hidden_states=True).last_hidden_state
+                        else:
+                            if conf.everyone.clip_penultimate:
+                                z = torch.cat((z, self.text_encoder.text_model.final_layer_norm(self.text_encoder(chunk.to(self.device), output_hidden_states=True)['hidden_states'][-2])), dim=-2)
+                            else:
+                                z = torch.cat((z, self.text_encoder(chunk.to(self.device), output_hidden_states=True).last_hidden_state), dim=-2)
+                    input_ids = z
+                else:
+                    for i, x in enumerate(input_ids):
+                        input_ids[i] = [self.tokenizer.bos_token_id, *x, *np.full((self.tokenizer.model_max_length - len(x) - 1), self.tokenizer.eos_token_id)]
+                    if conf.everyone.clip_penultimate:    
+                        input_ids = self.text_encoder.text_model.final_layer_norm(self.text_encoder(torch.asarray(input_ids).to(self.device), output_hidden_states=True)['hidden_states'][-2])
+                    else:
+                        input_ids = self.text_encoder(torch.asarray(input_ids).to(self.device), output_hidden_states=True).last_hidden_state
+            input_ids = torch.stack(tuple(input_ids))
+
             return {
                 'pixel_values': pixel_values,
-                'input_ids': padded_tokens.input_ids,
-                'attention_mask': padded_tokens.attention_mask,
+                'input_ids': input_ids,
+                'tokens': tokens
             }
 
 # Adapted from torch-ema https://github.com/fadel/pytorch_ema/blob/master/torch_ema/ema.py#L14
@@ -712,81 +571,179 @@ class EMAModel:
             for p in self.shadow_params
         ]
 
+def backgroundreport(url, data):
+    requests.post(url, json=data)
+
+def setuphivemind():
+    if os.path.exists(conf.local.working_path):
+        shutil.rmtree(conf.local.working_path)
+    os.makedirs(conf.local.working_path)
+
+    if requests.get('http://' + conf.everyone.server + '/info').status_code == 200:
+        print("Connection Success")
+        serverconfig = json.loads(requests.get('http://' + conf.everyone.server + '/config').content)
+        print(serverconfig)
+        imgs_per_epoch = int(serverconfig["ImagesPerEpoch"])
+        total_epochs = int(serverconfig["Epochs"])
+        return(imgs_per_epoch, total_epochs)
+    else:
+        raise ConnectionError("Unable to connect to server")
+
+def getchunk(server, amount):
+    if os.path.isdir(temporary_dataset):
+        shutil.rmtree(temporary_dataset)
+    os.mkdir(temporary_dataset)
+    serverdomain = 'http://' + server
+    rtasks_url = serverdomain + '/v1/get/tasks/' + str(amount)
+    rtasks = requests.get(rtasks_url).json()
+    
+    print("Downloading Files")
+    pfiles = requests.post(serverdomain + '/v1/get/files', json=rtasks)
+    tmpZip = conf.local.working_path + '/tmp.zip'
+    open(tmpZip, 'wb').write(pfiles.content)
+    
+    zipfile.ZipFile(tmpZip, 'r').extractall(temporary_dataset)
+    os.remove(tmpZip)
+    return(rtasks)
+
+def report(server, tasks):
+    preport = requests.post('http://' + server + '/v1/post/epochcount', json=tasks)
+    if preport.status_code == 200:
+        return True
+    else:
+        return False
+
+def dataloader(tokenizer, text_encoder, device, world_size, rank):
+    # load dataset
+    store = ImageStore(temporary_dataset)
+    dataset = AspectDataset(store, tokenizer, text_encoder, device, ucg=float(conf.everyone.ucg))
+    sampler = SimpleBucket(
+            store = store,
+            batch_size = conf.local.batch_size,
+            shuffle = conf.advanced.buckets.shuffle,
+            resize = conf.local.image_store.resize,
+            image_side_min = conf.advanced.buckets.side_min,
+            image_side_max = conf.advanced.buckets.side_max,
+            image_side_divisor = 64,
+            max_image_area = conf.everyone.resolution ** 2,
+            num_replicas = world_size,
+            rank = rank
+    )
+
+    print(f'STORE_LEN: {len(store)}')
+
+    # if args.output_bucket_info:
+    #     print(sampler.get_bucket_info())
+
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        num_workers=0,
+        collate_fn=dataset.collate_fn
+    )
+    
+    # # Migrate dataset
+    # if args.resize and not args.no_migration:
+    #     for _, batch in enumerate(train_dataloader):
+    #         continue
+    #     print(f"Completed resize and migration to '{args.dataset}_cropped' please relaunch the trainer without the --resize argument and train on the migrated dataset.")
+    #     exit(0)
+
+    return train_dataloader
+
 def main():
-    rank = get_rank()
-    world_size = get_world_size()
+    rank = 0
+    # world_size = get_world_size()
     torch.cuda.set_device(rank)
 
     if rank == 0:
-        os.makedirs(args.output_path, exist_ok=True)
+        os.makedirs(conf.local.output_path, exist_ok=True)
         
         mode = 'disabled'
-        if args.enablewandb:
+        if conf.local.wandb:
             mode = 'online'
-        if args.hf_token is not None:
-            os.environ['HF_API_TOKEN'] = args.hf_token
-            args.hf_token = None
-        run = wandb.init(project=args.project_id, name=args.run_name, config=vars(args), dir=args.output_path+'/wandb', mode=mode)
+        if conf.local.hf_token is not None:
+            os.environ['HF_API_TOKEN'] = conf.local.hf_token
+            conf.local.hf_token = None
+        run = wandb.init(project=conf.everyone.project_name, name=conf.everyone.project_name, config=vars(args), dir=conf.local.output_path+'/wandb', mode=mode)
 
         # Inform the user of host, and various versions -- useful for debugging issues.
-        print("RUN_NAME:", args.run_name)
+        print("RUN_NAME:", conf.everyone.project_name)
         print("HOST:", socket.gethostname())
         print("CUDA:", torch.version.cuda)
         print("TORCH:", torch.__version__)
         print("TRANSFORMERS:", transformers.__version__)
         print("DIFFUSERS:", diffusers.__version__)
-        print("MODEL:", args.model)
-        print("FP16:", args.fp16)
-        print("RESOLUTION:", args.resolution)
+        print("MODEL:", conf.everyone.model)
+        print("FP16:", conf.everyone.fp16)
+        print("RESOLUTION:", conf.everyone.resolution)
 
 
-    if args.hf_token is not None:
+    if conf.local.hf_token is not None:
         print('It is recommended to set the HF_API_TOKEN environment variable instead of passing it as a command line argument since WandB will automatically log it.')
     else:
         try:
-            args.hf_token = os.environ['HF_API_TOKEN']
+            conf.local.hf_token = os.environ['HF_API_TOKEN']
             print("HF Token set via enviroment variable")
         except Exception:
             print("No HF Token detected in arguments or enviroment variable, setting it to none (as in string)")
-            args.hf_token = "none"
+            conf.local.hf_token = "none"
 
     device = torch.device('cuda')
 
     print("DEVICE:", device)
 
     # setup fp16 stuff
-    scaler = torch.cuda.amp.GradScaler(enabled=args.fp16)
+    scaler = torch.cuda.amp.GradScaler(enabled=conf.everyone.fp16)
 
     # Set seed
-    torch.manual_seed(args.seed)
-    print('RANDOM SEED:', args.seed)
-
-    if args.resume:
-        args.model = args.resume
+    torch.manual_seed(conf.everyone.seed)
+    random.seed(conf.everyone.seed)
+    np.random.seed(conf.everyone.seed)
+    print('RANDOM SEED:', conf.everyone.seed)
     
-    tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder='tokenizer', use_auth_token=args.hf_token)
-    text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder='text_encoder', use_auth_token=args.hf_token)
-    vae = AutoencoderKL.from_pretrained(args.model, subfolder='vae', use_auth_token=args.hf_token)
-    unet = UNet2DConditionModel.from_pretrained(args.model, subfolder='unet', use_auth_token=args.hf_token)
+    tokenizer = CLIPTokenizer.from_pretrained(conf.everyone.model, subfolder='tokenizer', use_auth_token=conf.local.hf_token)
+    text_encoder = CLIPTextModel.from_pretrained(conf.everyone.model, subfolder='text_encoder', use_auth_token=conf.local.hf_token)
+    vae = AutoencoderKL.from_pretrained(conf.everyone.model, subfolder='vae', use_auth_token=conf.local.hf_token)
+    unet = UNet2DConditionModel.from_pretrained(conf.everyone.model, subfolder='unet', use_auth_token=conf.local.hf_token)
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
+    if not conf.everyone.train_text_encoder:
+        text_encoder.requires_grad_(False)
 
-    if args.gradient_checkpointing:
+    if conf.local.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-    
-    if args.use_xformers:
+        if conf.everyone.train_text_encoder:
+            text_encoder.gradient_checkpointing_enable()
+
+    if conf.local.xformers:
         unet.set_use_memory_efficient_attention_xformers(True)
 
-    weight_dtype = torch.float16 if args.fp16 else torch.float32
+    # "The “safer” approach would be to move the model to the device first and create the optimizer afterwards."
+    weight_dtype = torch.float16 if conf.everyone.fp16 else torch.float32
 
     # move models to device
     vae = vae.to(device, dtype=weight_dtype)
     unet = unet.to(device, dtype=torch.float32)
-    text_encoder = text_encoder.to(device, dtype=weight_dtype)
+    text_encoder = text_encoder.to(device, dtype=weight_dtype if not conf.everyone.train_text_encoder else torch.float32)
 
-    if args.use_8bit_adam: # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
+    # unet = torch.nn.parallel.DistributedDataParallel(
+    #     unet,
+    #     device_ids=[rank],
+    #     output_device=rank,
+    #     gradient_as_bucket_view=True
+    # )
+
+    # if conf.everyone.train_text_encoder:
+    #     text_encoder = torch.nn.parallel.DistributedDataParallel(
+    #         text_encoder,
+    #         device_ids=[rank],
+    #         output_device=rank,
+    #         gradient_as_bucket_view=True
+    #     )
+
+    if conf.local.bit_adam: # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
         try:
             import bitsandbytes as bnb
             optimizer_cls = bnb.optim.AdamW8bit
@@ -796,48 +753,118 @@ def main():
     else:
         optimizer_cls = torch.optim.AdamW
 
-    tmp_optimizer = optimizer_cls(
+    """
+    optimizer = optimizer_cls(
         unet.parameters(),
         lr=args.lr,
         betas=(args.adam_beta1, args.adam_beta2),
         eps=args.adam_epsilon,
         weight_decay=args.adam_weight_decay,
     )
+    """
 
-    noise_scheduler = DDPMScheduler(
-        beta_start=0.00085,
-        beta_end=0.012,
-        beta_schedule='scaled_linear',
-        num_train_timesteps=1000,
-        clip_sample=False
+    optimizer_parameters = unet.parameters() if not conf.everyone.train_text_encoder else itertools.chain(unet.parameters(), text_encoder.parameters())
+
+    # Create distributed optimizer
+    #from torch.distributed.optim import ZeroRedundancyOptimizer
+    #we changed to cls for single gpu training
+    tmp_optimizer = optimizer_cls(
+        optimizer_parameters,
+        # optimizer_class=optimizer_cls,
+        # parameters_as_bucket_view=True,
+        lr=float(conf.everyone.lr),
+        betas=(float(conf.advanced.opt.betas.one), float(conf.advanced.opt.betas.two)),
+        eps=float(conf.advanced.opt.epsilon),
+        weight_decay=float(conf.advanced.opt.weight_decay),
     )
 
-    if args.node:
-        getmaddrs_url = 'http://' + datasetServer + '/v1/get/peers'
-        getmaddrs_req = requests.get(getmaddrs_url)
-        if getmaddrs_req.status_code == 200:
-            peer_list = json.loads(getmaddrs_req.content)
-        else:
-            raise ConnectionError("Unable to obtain peers from server")
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        conf.everyone.model,
+        subfolder='scheduler',
+        use_auth_token=conf.local.hf_token,
+    )
+
+    # Hivemind Setup
+    # get network peers (if mother peer then ignore)
+    rmaddrs_rq = requests.get('http://' + conf.everyone.server + "/v1/get/peers")
+    if rmaddrs_rq.status_code == 200:
+        peer_list = json.loads(rmaddrs_rq.content)
     else:
-        peer_list = None
+        raise ConnectionError("Unable to obtain peers from server")
 
-    host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(args.o_port1)
-    host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(args.o_port2) + "/quic"
+    # set local maddrs ports
+    host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(conf.local.networking.internal.tcp)
+    host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(conf.local.networking.internal.udp) + "/quic"
 
+    # set public to-be-announced maddrs
+    # get public ip
+    if conf.local.networking.external.ip == "":
+        conf.local.networking.external.ip = None
+
+    if conf.local.networking.external.ip == "auto" or conf.local.networking.external.ip is None:
+        completed = False
+        if completed is False:
+            try:
+                ip = requests.get("https://api.ipify.org/", timeout=5).text
+                ipsrc = "online"
+                completed = True
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+                print("Ipfy.org took too long, trying another domain.")
+        if completed is False:
+            try:
+                ip = requests.get("https://ipv4.icanhazip.com/", timeout=5).text
+                ipsrc = "online"
+                completed = True
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+                print("Icanhazip.com took too long, trying another domain.")
+        if completed is False:
+            try:
+                tmpjson = json.loads(requests.get("https://jsonip.com/", timeout=5).content)
+                ip = tmpjson["ip"]
+                ipsrc = "online"
+                completed = True
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+                print("Jsonip.com took too long, ran out of alternatives.")
+                raise(ConnectionError)
+        
+    else:
+        ip = conf.local.networking.external.ip
+        ipsrc = "config"
+    
+    #check if valid ip
+    try:
+        ip = ipaddress.ip_address(ip)
+        ip = str(ip)
+    except Exception:
+        raise ValueError("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
+
+    public_maddrs_tcp = "/ip4/" + ip + "/tcp/" + str(conf.local.networking.external.tcp)
+    public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.local.networking.external.udp) + "/quic"
+
+    #init dht
+    #TODO: add announce_maddrs
     dht = hivemind.DHT(
         host_maddrs=[host_maddrs_tcp, host_maddrs_udp],
-        initial_peers=peer_list, 
-        start=True
+        initial_peers=peer_list,
+        start=True,
+        announce_maddrs=[public_maddrs_tcp, public_maddrs_udp]
     )
 
+    #set compression and optimizer
     compression = Float16Compression()
+
+    lr_scheduler = get_scheduler(
+    conf.everyone.lr_scheduler,
+    optimizer=tmp_optimizer,
+    num_warmup_steps=int(float(conf.advanced.lr_scheduler_warmup) * imgs_per_epoch * total_epochs),
+    num_training_steps=total_epochs * imgs_per_epoch,
+    )
 
     optimizer = hivemind.Optimizer(
         dht=dht,
         run_id="testrun",
         batch_size_per_step=1,
-        target_batch_size=40000,
+        target_batch_size=4000,
         optimizer=tmp_optimizer,
         use_local_updates=False,
         matchmaking_time=260.0,
@@ -846,130 +873,177 @@ def main():
         load_state_timeout=1200.0,
         grad_compression=compression,
         state_averaging_compression=compression,
-        grad_averager_factory=partial(PowerSGDGradientAverager, averager_rank=32, min_compression_ratio=0.5),
-        verbose=True
+        verbose=True,
+        scheduler=lr_scheduler
     )
 
     print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
     print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
-    print("Important Note: This is a NEW training session.")
 
-    print("Posting maddrs...")
-    postmaddrs_url = 'http://' + datasetServer + '/v1/post/peerannounce'
-    maddr_list = []
-    for addr in dht.get_visible_maddrs():
-        str_address = str(addr)
-        address_as_dict = str_address.split('/')
-        if args.ip_is_different:
-            print("Changing " + address_as_dict[2] + " into " + args.p_ip)
-            address_as_dict[2] = args.p_ip
-            print("Local Ports are: " + str(args.o_port1) + " for TCP, and " + str(args.o_port2) + " for UDP")
-            print("Public Ports are: " + str(args.p_port1) + " for TCP, and " + str(args.p_port2) + " for UDP")
-            if address_as_dict[3] == "tcp":
-                address_as_dict[4] = str(args.p_port1)
-            elif address_as_dict[3] == "udp":
-                address_as_dict[4] = str(args.p_port2)
-        joined_addr_dict = "/".join(address_as_dict)
-        maddr_list.append(joined_addr_dict)
-    send_dict = {"myMADDRS": maddr_list}
-    postmaddrs_req = requests.post(postmaddrs_url, json=send_dict)
-    if postmaddrs_req.status_code == 200:
-        print("Success")
-    else:
-        raise ConnectionError("Failed to report MADDRS")
+    #statistics
+    if conf.local.stats.enable:
+        statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
+        bandwidthstats = {}
+        specs_stats = {}
+        print("Stats enabled")
 
-    def trainDataloader():
-        # load dataset
-        store = ImageStore(directoryToExtract)
-        dataset = AspectDataset(store, tokenizer)
-        bucket = AspectBucket(store, args.num_buckets, args.batch_size, args.bucket_side_min, args.bucket_side_max, 64, args.resolution * args.resolution, 2.0)
-        sampler = AspectBucketSampler(bucket=bucket, num_replicas=world_size, rank=rank)
+        if conf.local.stats.geoaprox:
+            statconfig['geoaprox'] = True
 
-        print(f'STORE_LEN: {len(store)}')
+        if conf.local.stats.bandwidth:
+            statconfig["bandwidth"] = True
+            import speedtest
+            session = speedtest.Speedtest()
+            download = session.download()
+            upload = session.upload()
+            ping = session.results.ping
+            bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
 
-        if args.output_bucket_info:
-            print(bucket.get_bucket_info())
-            exit(0)
+        if conf.local.stats.specs:
+            statconfig["specs"] = True
+            # GPU
+            # https://docs.nvidia.com/deploy/nvml-api/index.html
+            pynvml.nvmlInit()
+            cudadriver_version = pynvml.nvmlSystemGetCudaDriverVersion()
+            driver_version = pynvml.nvmlSystemGetDriverVersion()
+            NVML_version = pynvml.nvmlSystemGetNVMLVersion()
 
-        train_dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_sampler=sampler,
-            num_workers=0,
-            collate_fn=dataset.collate_fn
-        )
+            #TODO: Assuming one gpu only
+            cudadev = torch.cuda.current_device()
+            nvml_device = pynvml.nvmlDeviceGetHandleByIndex(cudadev)
 
-        return train_dataloader
+            #psu_info = pynvml.nvmlUnitGetPsuInfo(pynvml.c_nvmlPSUInfo_t.)
+            #temperature_info = pynvml.nvmlUnitGetTemperature(nvml_device)
+            #unit_info = pynvml.nvmlUnitGetUnitInfo(nvml_device)
 
-        # # Migrate dataset
-        # if args.resize and not args.no_migration:
-        #     for _, batch in enumerate(train_dataloader):
-        #         continue
-        #     print(f"Completed resize and migration to '{args.dataset}_cropped' please relaunch the trainer without the --resize argument and train on the migrated dataset.")
-        #     exit(0)
+            arch_info = pynvml.nvmlDeviceGetArchitecture(nvml_device)
+            brand_info = pynvml.nvmlDeviceGetBrand(nvml_device)
+            #clock_info = pynvml.nvmlDeviceGetClock(nvml_device)
+            #clockinfo_info = pynvml.nvmlDeviceGetClockInfo(nvml_device)
+            #maxclock_info = pynvml.nvmlDeviceGetMaxClockInfo(nvml_device)
+            computemode_info = pynvml.nvmlDeviceGetComputeMode(nvml_device)
+            compute_compatability = pynvml.nvmlDeviceGetCudaComputeCapability(nvml_device)
 
-    #unet = torch.nn.parallel.DistributedDataParallel(unet, device_ids=[rank], output_device=rank, gradient_as_bucket_view=True)
+            pcie_link_gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(nvml_device)
+            pcie_width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(nvml_device)
+
+            display_active_bool = pynvml.nvmlDeviceGetDisplayActive(nvml_device)
+
+            #memory_info = pynvml.nvmlDeviceGetMemoryInfo(nvml_device)
+
+            gpu_energy_cons = pynvml.nvmlDeviceGetTotalEnergyConsumption(nvml_device)
+            device_name = pynvml.nvmlDeviceGetName(nvml_device)
+
+            gpusinfo = {
+                "software": {
+                    "CUDA_DRIVER_VERSION": str(cudadriver_version),
+                    "NVIDIA_DRIVER_VERSION": str(driver_version),
+                    "NVML_VERSION": str(NVML_version),
+                },
+                "hardware": {
+                    "energy": {
+                        #"PSU_INFO": psu_info,
+                        #"TEMPERATURE_INFO": temperature_info,
+                        "ENERGY_CONSUMPTION": str(gpu_energy_cons)
+                    },
+                    "info": {
+                        #"UNIT_INFO": unit_info,
+                        "BRAND_INFO": str(brand_info),
+                        "DEV_NAME": str(device_name),
+                        "DISPLAY_ACTIVE": str(display_active_bool),
+                        "ARCH_INFO": str(arch_info)
+                    },
+                    "memory": {
+                        "PCIE_LINK_GEN": str(pcie_link_gen),
+                        "PCIE_WIDTH": str(pcie_width),
+                        #"MEMORY_INFO": memory_info,
+                    },
+                    "compute": {
+                        #"CLOCK": clock_info,
+                        #"CLOCK_INFO": clockinfo_info,
+                        #"MAX_CLOCK": maxclock_info,
+                        "COMPUTE_MODE": str(computemode_info),
+                        "COMPUTE_COMPATABILITY": str(compute_compatability)
+                    }
+                }
+            }
+
+            cpuinfo = {}
+            import cpuinfo
+            cpudict = cpuinfo.get_cpu_info()
+            cpuinfo = {
+                'CPU_ARCH': str(cpudict['arch']),
+                "CPU_HZ_AD": str(cpudict["hz_advertised_friendly"]),
+                "CPU_HZ_AC": str(cpudict["hz_actual_friendly"]),
+                "CPU_BITS": str(cpudict["bits"]),
+                "VENDOR_ID": str(cpudict["vendor_id_raw"]),
+                #"HARDWARE_RAW": cpudict["hardware_raw"],
+                "BRAND_RAW": str(cpudict["brand_raw"])
+            }
+
+            specs_stats = {'gpu': gpusinfo, 'cpu': cpuinfo}
+        statsjson = {
+            'python_ver': str(sys.version),
+            'config': statconfig,
+            'bandwidth': bandwidthstats,
+            'specs': specs_stats
+        }
+        print(statsjson)
+        pstats = requests.post('http://' + conf.everyone.server + '/v1/post/stats', json=json.dumps(statsjson))
+        if pstats.status_code != 200:
+            raise ConnectionError("Failed to report stats")
 
     # create ema
-    if args.use_ema:
+    if conf.everyone.use_ema:
         ema_unet = EMAModel(unet.parameters())
 
     print(get_gpu_ram())
 
-    global_step = 0
-
-    if args.resume:
-        target_global_step = int(args.resume.split('_')[-1])
-        print(f'resuming from {args.resume}...')
-
-    # lr_scheduler = get_scheduler(
-    #     args.lr_scheduler,
-    #     optimizer=optimizer,
-    #     num_warmup_steps=int(args.lr_scheduler_warmup * num_steps_per_epoch * args.epochs),
-    #     num_training_steps=args.epochs * num_steps_per_epoch,
-    #     #last_epoch=(global_step // num_steps_per_epoch) - 1,
-    # )
-
     def save_checkpoint(global_step):
         if rank == 0:
-            if args.use_ema:
+            if conf.everyone.use_ema:
                 ema_unet.store(unet.parameters())
                 ema_unet.copy_to(unet.parameters())
             pipeline = StableDiffusionPipeline(
-                text_encoder=text_encoder,
+                text_encoder=text_encoder, #if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
                 vae=vae,
                 unet=unet,
                 tokenizer=tokenizer,
-                scheduler=PNDMScheduler(
-                    beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
-                ),
+                scheduler=PNDMScheduler.from_pretrained(conf.everyone.model, subfolder="scheduler", use_auth_token=conf.local.hf_token),
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
-            print(f'saving checkpoint to: {args.output_path}/{args.run_name}_{global_step}')
-            pipeline.save_pretrained(f'{args.output_path}/{args.run_name}_{global_step}')
+            print(f'saving checkpoint to: {conf.local.output_path}/{"hivemind"}_{global_step}')
+            pipeline.save_pretrained(f'{conf.local.output_path}/{"hivemind"}_{global_step}')
 
-            if args.use_ema:
+            if conf.everyone.use_ema:
                 ema_unet.restore(unet.parameters())
-        # barrier
-        torch.distributed.barrier()
 
     # train!
     try:
+        already_done_steps = (optimizer.tracker.global_progress.samples_accumulated + (optimizer.tracker.global_progress.epoch * optimizer.target_batch_size))
+        print("Skipping", already_done_steps, "steps on the LR Scheduler.")
+        for i in range(already_done_steps):
+            lr_scheduler.step()
+        print("Done")
         loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
         while True:
-            recipt = onlineGather(datasetServer, wantedImages, directoryToExtract)
+            print(get_gpu_ram())
+            recipt = getchunk(conf.everyone.server, conf.everyone.imgcount)
 
-            print("reloading dataset")
-            train_dataloader = trainDataloader()
+            #Note: we removed worldsize here
+            train_dataloader = dataloader(tokenizer, text_encoder, device, 1, rank)
+
             num_steps_per_epoch = len(train_dataloader)
             progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
+            global_step = 0
+
             unet.train()
+            if conf.everyone.train_text_encoder:
+                text_encoder.train()
+
             for _, batch in enumerate(train_dataloader):
-                if args.resume and global_step < target_global_step:
-                    if rank == 0:
-                        progress_bar.update(1)
-                    global_step += 1
-                    continue
+                
                 b_start = time.perf_counter()
                 latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * 0.18215
@@ -985,102 +1059,131 @@ def main():
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch['input_ids'].to(device), output_hidden_states=True)
-                if args.clip_penultimate:
-                    encoder_hidden_states = text_encoder.text_model.final_layer_norm(encoder_hidden_states['hidden_states'][-2])
+                # Get the embedding for conditioning
+                encoder_hidden_states = batch['input_ids']
+
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
-                    encoder_hidden_states = encoder_hidden_states.last_hidden_state
+                    raise ValueError(f"Unknown prediction type: {noise_scheduler.config.prediction_type}")
 
-                # Predict the noise residual and compute loss
-                with torch.autocast('cuda', enabled=args.fp16):
-                    noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                if not conf.everyone.train_text_encoder:
+                    # Predict the noise residual and compute loss
+                    with torch.autocast('cuda', enabled=conf.everyone.fp16):
+                        noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                        
+                    loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
-                loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+                    # backprop and update
+                    scaler.scale(loss).backward()
+                    torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
+                else:
+                    # Predict the noise residual and compute loss
+                    with torch.autocast('cuda', enabled=conf.everyone.fp16):
+                        noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                        
+                    loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
-                # Backprop and all reduce
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.step()
-                optimizer.zero_grad()
+                    # backprop and update
+                    scaler.scale(loss).backward()
+                    torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(text_encoder.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()                    
 
                 # Update EMA
-                if args.use_ema:
+                if conf.everyone.use_ema:
                     ema_unet.step(unet.parameters())
 
                 # perf
                 b_end = time.perf_counter()
                 seconds_per_step = b_end - b_start
                 steps_per_second = 1 / seconds_per_step
-                rank_images_per_second = args.batch_size * steps_per_second
-                world_images_per_second = rank_images_per_second * world_size
-                samples_seen = global_step * args.batch_size * world_size
+                rank_images_per_second = conf.local.batch_size * steps_per_second
+                #world_images_per_second = rank_images_per_second #* world_size
+                samples_seen = global_step * conf.local.batch_size #* world_size
 
-                # All reduce loss
-                torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+                # get global loss for logging
+                # torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+                loss = loss #/ world_size
 
                 if rank == 0:
                     progress_bar.update(1)
                     global_step += 1
                     logs = {
-                        "train/loss": loss.detach().item() / world_size,
+                        "train/loss": loss.detach().item(),
+                        "train/lr": lr_scheduler.get_last_lr()[0],
+                        "train/epoch": 1,
                         "train/step": global_step,
                         "train/samples_seen": samples_seen,
                         "perf/rank_samples_per_second": rank_images_per_second,
-                        "perf/global_samples_per_second": world_images_per_second,
+                        #"perf/global_samples_per_second": world_images_per_second,
                     }
                     progress_bar.set_postfix(logs)
                     run.log(logs, step=global_step)
+                    # if counter < 5:
+                    #     counter += 1
+                    # elif counter >= 5:
+                    #     data = {
+                    #         "tracker.global_progress": optimizer.tracker.global_progress,
+                    #         "tracker.local_progress": optimizer.tracker.local_progress,
+                    #     }
+                    #     print(data)
+                    #     counter = 0
+                    #Thread(target=backgroundreport, args=(("http://" + conf.everyone.server + "/v1/post/ping"), "world_images_per_second")).start()
 
-                if global_step % args.save_steps == 0:
+                if global_step % conf.local.save_steps == 0 and global_step > 0:
                     save_checkpoint(global_step)
-
-                if args.enableinference:
-                    if global_step % args.image_log_steps == 0:
+                    
+                if conf.local.inference.enable:
+                    if global_step % conf.inference.log_steps == 0 and global_step > 0:
                         if rank == 0:
                             # get prompt from random batch
-                            prompt = tokenizer.decode(batch['input_ids'][random.randint(0, len(batch['input_ids'])-1)].tolist())
+                            prompt = tokenizer.decode(batch['tokens'][random.randint(0, len(batch['tokens'])-1)])
 
-                            if args.image_log_scheduler == 'DDIMScheduler':
+                            if conf.inference.image_log_scheduler == 'DDIMScheduler':
                                 print('using DDIMScheduler scheduler')
-                                scheduler = DDIMScheduler(
-                                    beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear"
-                                )
+                                scheduler = DDIMScheduler.from_pretrained(conf.everyone.model, subfolder="scheduler", use_auth_token=conf.local.hf_token)
                             else:
                                 print('using PNDMScheduler scheduler')
-                                scheduler=PNDMScheduler(
-                                    beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", skip_prk_steps=True
-                                )
+                                scheduler=PNDMScheduler.from_pretrained(conf.everyone.model, subfolder="scheduler", use_auth_token=conf.local.hf_token)
 
                             pipeline = StableDiffusionPipeline(
-                                text_encoder=text_encoder,
+                                text_encoder=text_encoder, #if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
                                 vae=vae,
-                                unet=unet,
+                                unet=unet.module,
                                 tokenizer=tokenizer,
                                 scheduler=scheduler,
                                 safety_checker=None, # disable safety checker to save memory
                                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
                             ).to(device)
                             # inference
-                            if args.enablewandb:
+                            if conf.local.wandb:
                                 images = []
                             else:
-                                saveInferencePath = args.output_path + "/inference"
+                                saveInferencePath = conf.local.output_path + "/inference"
                                 os.makedirs(saveInferencePath, exist_ok=True)
                             with torch.no_grad():
-                                with torch.autocast('cuda', enabled=args.fp16):
-                                    for _ in range(args.image_log_amount):
-                                        if args.enablewandb:
+                                with torch.autocast('cuda', enabled=conf.everyone.fp16):
+                                    for _ in range(conf.local.inference.amount):
+                                        if conf.local.wandb:
                                             images.append(
                                                 wandb.Image(pipeline(
-                                                    prompt, num_inference_steps=args.image_log_inference_steps
+                                                    prompt, num_inference_steps=conf.local.inference.inference_steps
                                                 ).images[0],
                                                 caption=prompt)
                                             )
                                         else:
                                             from datetime import datetime
-                                            images = pipeline(prompt, num_inference_steps=args.image_log_inference_steps).images[0]
+                                            images = pipeline(prompt, num_inference_steps=conf.local.inference.inference_steps).images[0]
                                             filenameImg = str(time.time_ns()) + ".png"
                                             filenameTxt = str(time.time_ns()) + ".txt"
                                             images.save(saveInferencePath + "/" + filenameImg)
@@ -1091,34 +1194,29 @@ def main():
                                                 f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
 
                             # log images under single caption
-                            if args.enablewandb:
+                            if conf.local.wandb:
                                 run.log({'images': images}, step=global_step)
 
                             # cleanup so we don't run out of memory
                             del pipeline
                             gc.collect()
-                        torch.distributed.barrier()
-            print("Did a dataset run, reporting")
-            reportStatus = onlineReport(datasetServer, recipt)
-            if reportStatus is True:
+            sreport = report(conf.everyone.server, recipt)
+            if sreport is True:
                 print("Report Success")
             else:
-                print("Report failed, exiting")
-                exit()
-            print("Cleaning folder...")
-            shutil.rmtree(workingDirectory + "/tmp")
+                raise ConnectionError("Couldn't report")
     except Exception as e:
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
         pass
 
     save_checkpoint(global_step)
 
-    torch.distributed.barrier()
-    cleanup()
+    #cleanup()
 
     print(get_gpu_ram())
     print('Done!')
 
 if __name__ == "__main__":
-    setup()
+    #setup()
+    imgs_per_epoch, total_epochs = setuphivemind()
     main()
