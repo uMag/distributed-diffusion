@@ -3,7 +3,8 @@ from flask_socketio import SocketIO
 from controlled_trainer import PyTorchTrainer
 import omegaconf
 import requests
-from multiprocessing import Process, Queue, set_start_method
+from threading import Thread
+from queue import Queue
 import time
 import pickle
 import os
@@ -124,14 +125,9 @@ def handle_start():
 def handle_stop():
   command_queue.put('stop')
 
-@socketio.on('terminate')
-def handle_terminate():
-  trainer_process.terminate()
-  
 if __name__ == '__main__':
-  set_start_method('spawn', force=True)
   log_queue = Queue()
   command_queue = Queue()
-  trainer_process = Process(target=PyTorchTrainer, args=(command_queue, log_queue))
+  trainer_process = Thread(target=PyTorchTrainer, args=(command_queue, log_queue))
   trainer_process.start()
   socketio.run(app)
