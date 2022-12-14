@@ -19,7 +19,6 @@
       </div>
       <div class="mx-auto flex justify-center">
         <button id="stop_btn" class="focus:shadow-outline m-2 rounded bg-red-500 py-2 px-4 font-bold text-white hover:bg-red-900 focus:outline-none">Stop 📁</button>
-        <button id="terminate_btn" class="focus:shadow-outline m-2 rounded bg-red-700 py-2 px-4 font-bold text-white hover:bg-red-900 focus:outline-none">Terminate ⚠️</button>
       </div>
     </div>
   </div>
@@ -67,11 +66,6 @@
     // Send the "stop" event when the stop button is clicked
     document.getElementById('stop_btn').onclick = function() {
       socket.emit('stop');
-    };
-
-    // Send the "terminate" event when the terminate button is clicked
-    document.getElementById('terminate_btn').onclick = function() {
-      socket.emit('terminate');
     };
 
     function start_trainer() {

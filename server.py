@@ -118,16 +118,29 @@ def handle_logs():
 @socketio.on('start')
 def handle_start():
   print("started!")
-  # Send a 'start' command to the subprocess using the write end of the command pipe
-  command_queue.put('start')
+  try:
+    global trainer_process
+    if trainer_process.is_alive():
+      log_queue.put('TRAINER_MANAGER: Trainer is already running!.')
+    else:
+      log_queue.put('TRAINER_MANAGER: Initiating trainer thread. Start after previous termination.')
+      trainer_process = Thread(target=PyTorchTrainer, args=(command_queue, log_queue))
+      trainer_process.start()
+      command_queue.put('start')
+  except Exception as e:
+    print("Got Exception", e)
+    log_queue.put('TRAINER_MANAGER: Initiating trainer thread. First Start.')
+    trainer_process = Thread(target=PyTorchTrainer, args=(command_queue, log_queue))
+    trainer_process.start()
+    # Send a 'start' command to the subprocess using the write end of the command pipe
+    command_queue.put('start')
 
 @socketio.on('stop')
 def handle_stop():
+  log_queue.put('TRAINER_MANAGER: Sending stop command to trainer.')
   command_queue.put('stop')
 
 if __name__ == '__main__':
   log_queue = Queue()
   command_queue = Queue()
-  trainer_process = Thread(target=PyTorchTrainer, args=(command_queue, log_queue))
-  trainer_process.start()
   socketio.run(app)

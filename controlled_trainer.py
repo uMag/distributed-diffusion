@@ -154,13 +154,13 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
     dataset = AspectDataset(store, tokenizer, text_encoder, device, conf, ucg=float(conf.everyone.ucg))
     sampler = SimpleBucket(
             store = store,
-            batch_size = conf.batchSize,
+            batch_size = int(conf.batchSize),
             shuffle = conf.everyone.buckets_shuffle,
             resize = conf.image_store_resize,
-            image_side_min = conf.everyone.buckets_side_min,
-            image_side_max = conf.everyone.buckets_side_max,
+            image_side_min = int(conf.everyone.buckets_side_min),
+            image_side_max = int(conf.everyone.buckets_side_max),
             image_side_divisor = 64,
-            max_image_area = conf.everyone.resolution ** 2,
+            max_image_area = int(conf.everyone.resolution) ** 2,
             num_replicas = world_size,
             rank = rank
     )
@@ -544,22 +544,23 @@ def InitializeTraining(command_queue, log_queue, conf):
             lr_scheduler.step()
         print("Done")
         loss = torch.tensor(0.0, device=device, dtype=weight_dtype)
+        global_step = 0
         while True:
             print(get_gpu_ram())
-            recipt = getchunk('http://' + conf.server, conf.imageCount, conf, log_queue)
+            #only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
+            recipt = getchunk(conf.server, conf.imageCount, conf, log_queue)
 
             #Note: we removed worldsize here
             train_dataloader = dataloader(tokenizer, text_encoder, device, 1, rank, conf, log_queue)
             num_steps_per_epoch = len(train_dataloader)
             progress_bar = tqdm.tqdm(range(num_steps_per_epoch), desc="Total Steps", leave=False)
-            global_step = 0
-
+            
             unet.train()
             if conf.everyone.train_text_encoder:
                 text_encoder.train()
 
             for _, batch in enumerate(train_dataloader):
-                if command_queue.empty() is False:
+                if command_queue.qsize() > 0:
                     command = command_queue.get()
                     if command == 'stop':
                         # Start training
@@ -629,9 +630,9 @@ def InitializeTraining(command_queue, log_queue, conf):
                 b_end = time.perf_counter()
                 seconds_per_step = b_end - b_start
                 steps_per_second = 1 / seconds_per_step
-                rank_images_per_second = conf.batchSize * steps_per_second
+                rank_images_per_second = int(conf.batchSize) * steps_per_second
                 #world_images_per_second = rank_images_per_second #* world_size
-                samples_seen = global_step * conf.batchSize #* world_size
+                samples_seen = global_step * int(conf.batchSize) #* world_size
 
                 # get global loss for logging
                 # torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
@@ -651,8 +652,8 @@ def InitializeTraining(command_queue, log_queue, conf):
                     }
                     progress_bar.set_postfix(logs)
                     run.log(logs, step=global_step)
-                    tqdm_out = progress_bar.format_dict()
-                    print(str(tqdm_out))
+                    #tqdm_out = progress_bar.format_dict()
+                    #print(str(tqdm_out))
                     # if counter < 5:
                     #     counter += 1
                     # elif counter >= 5:
@@ -727,7 +728,7 @@ def InitializeTraining(command_queue, log_queue, conf):
                             # cleanup so we don't run out of memory
                             del pipeline
                             gc.collect()
-            sreport = report('http://' + conf.server, recipt)
+            sreport = report(conf.server, recipt)
             if sreport is True:
                 print("Report Success")
             else:
