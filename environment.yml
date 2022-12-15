@@ -8,3 +8,5 @@ dependencies:
   - python=3.10
   - flask
   - pytorch-cuda=11.7 
+  - xformers
+
