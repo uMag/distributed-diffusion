@@ -369,7 +369,7 @@ def InitializeTraining(command_queue, log_queue, conf):
             ip = ipaddress.ip_address(ip)
             ip = str(ip)
         except Exception:
-            log_queue("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
+            log_queue.put("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
             raise ValueError("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
 
         public_maddrs_tcp = "/ip4/" + ip + "/tcp/" + str(conf.external_tcp)
