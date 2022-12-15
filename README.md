@@ -4,7 +4,7 @@ Train Stable Diffusion models across the internet with multiple peers
 By leveraging the power of multiple computers as peers, this project enables the training of machine learning models across the internet with high efficiency and fault-tolerance. The distributed training is facilitated by a DHT (Distributed Hash Table) which ensures that all peers are able to connect and share their training data. The resulting model is then averaged across all peers, ensuring that the final model is highly accurate and reliable. This decentralized approach allows for efficient and scalable model training without the need for a master node.
 
 # Sponsors
-- [http://www.redmond.ai/](Redmond.ai): Providing enterprise-grade compute and A100/4090s to test the swarm on. Thanks!
+- [Redmond.ai](http://www.redmond.ai/): Providing enterprise-grade compute and A100/4090s to test the swarm on. Thanks!
 
 # Features
 
