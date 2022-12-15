@@ -106,32 +106,32 @@ def get_gpu_ram() -> str:
            f"{torch_str}"
 
 def setuphivemind(conf, log_queue):
+    log_queue.put("Setting up hivemind")
     if os.path.exists(conf.intern.workingdir):
         shutil.rmtree(conf.intern.workingdir)
     os.makedirs(conf.intern.workingdir)
 
-    print("uhuidashuidas")
-
     if requests.get('http://' + conf.server + '/info').status_code == 200:
         print("Connection Success")
+        log_queue.put("Connected to the dataset server, retrieving lr_scheduler configuration")
         serverconfig = json.loads(requests.get('http://' + conf.server + '/v1/get/lr_schel_conf').content)
-        print("HEYYYYSDAUIDHSUDIAH")
         print(serverconfig)
         imgs_per_epoch = int(serverconfig["ImagesPerEpoch"])
         total_epochs = int(serverconfig["Epochs"])
-        print("428390482")
         return(imgs_per_epoch, total_epochs)
     else:
+        log_queue.put("Unable to connect to the dataset server")
         raise ConnectionError("Unable to connect to server")
 
 def getchunk(server, amount, conf, log_queue):
+    log_queue.put("Requesting Chunks")
     if os.path.isdir(conf.intern.tmpdataset):
         shutil.rmtree(conf.intern.tmpdataset)
     os.mkdir(conf.intern.tmpdataset)
     serverdomain = 'http://' + server
     rtasks_url = serverdomain + '/v1/get/tasks/' + str(amount)
     rtasks = requests.get(rtasks_url).json()
-    
+    log_queue.put("Request success, Downloading files")
     print("Downloading Files")
     pfiles = requests.post(serverdomain + '/v1/get/files', json=rtasks)
     tmpZip = conf.intern.workingdir + '/tmp.zip'
@@ -139,6 +139,7 @@ def getchunk(server, amount, conf, log_queue):
     
     zipfile.ZipFile(tmpZip, 'r').extractall(conf.intern.tmpdataset)
     os.remove(tmpZip)
+    log_queue.put("Chunks ready")
     return(rtasks)
 
 def report(server, tasks):
@@ -150,8 +151,11 @@ def report(server, tasks):
 
 def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queue):
     # load dataset
+    log_queue.put("Setting up ImageStore")
     store = ImageStore(conf.intern.tmpdataset, conf)
+    log_queue.put("Setting up AspectDataset")
     dataset = AspectDataset(store, tokenizer, text_encoder, device, conf, ucg=float(conf.everyone.ucg))
+    log_queue.put("Setting up SimpleBucket")
     sampler = SimpleBucket(
             store = store,
             batch_size = int(conf.batchSize),
@@ -164,9 +168,10 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
             num_replicas = world_size,
             rank = rank
     )
-
+    out_length = "Store Length: " + str(len(store))
+    log_queue.put(str(out_length))
     print(f'STORE_LEN: {len(store)}')
-
+    log_queue.put("Setting up Dataloader")
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -178,9 +183,7 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
 
 
 def InitializeTraining(command_queue, log_queue, conf):
-    print("AAAAAAAAAAAAAAAAAAAA")
     imgs_per_epoch, total_epochs = setuphivemind(conf, log_queue)
-    print("womp womp")
     config = omegaconf.OmegaConf.create(conf)
     rank = 0
 
@@ -197,17 +200,26 @@ def InitializeTraining(command_queue, log_queue, conf):
         # Inform the user of host, and various versions -- useful for debugging issues.
         print("RUN_NAME:", "Hivemind Project")
         print("HOST:", socket.gethostname())
+        log_queue.put("HOST: " + str(socket.gethostname()))
         print("CUDA:", torch.version.cuda)
+        log_queue.put(("CUDA: " + str(torch.version.cuda)))
         print("TORCH:", torch.__version__)
+        log_queue.put(("TORCH: " + str(torch.__version__)))
         print("TRANSFORMERS:", transformers.__version__)
+        log_queue.put(("TRANSFORMERS: " + str(transformers.__version__)))
         print("DIFFUSERS:", diffusers.__version__)
+        log_queue.put(("DIFFUSERS:" + str(diffusers.__version__)))
         print("MODEL:", conf.everyone.model)
+        log_queue.put(("MODEL:" + str(conf.everyone.model)))
         print("FP16:", conf.everyone.fp16)
+        log_queue.put(("FP16:" + str(conf.everyone.fp16)))
         print("RESOLUTION:", conf.everyone.resolution)
+        log_queue.put(("RESOLUTION:" + str(conf.everyone.resolution)))
     
     device = torch.device('cuda')
 
     print("DEVICE:", device)
+    log_queue.put(("DEVICE: " + str(device)))
 
     # setup fp16 stuff
     scaler = torch.cuda.amp.GradScaler(enabled=conf.everyone.fp16)
@@ -252,6 +264,7 @@ def InitializeTraining(command_queue, log_queue, conf):
             optimizer_cls = bnb.optim.AdamW8bit
         except:
             print('bitsandbytes not supported, using regular Adam optimizer')
+            log_queue.put('bitsandbytes not supported, using regular Adam optimizer')
             optimizer_cls = torch.optim.AdamW
     else:
         optimizer_cls = torch.optim.AdamW
@@ -295,9 +308,12 @@ def InitializeTraining(command_queue, log_queue, conf):
     if rmaddrs_rq.status_code == 200:
         peer_list = json.loads(rmaddrs_rq.content)
     else:
+        log_queue.put("Unable to obtain peers from server")
         raise ConnectionError("Unable to obtain peers from server")
 
+    log_queue.put("Trainer set to " + conf.trainermode + " mode")
     if conf.trainermode == "Client":
+        
         client_mode = True
         host_maddrs_full = None
         public_maddrs_full = None
@@ -315,6 +331,7 @@ def InitializeTraining(command_queue, log_queue, conf):
             conf.publicip = None
 
         if conf.publicip == "auto" or conf.publicip is None:
+            log_queue.put("Auto-detecting public IP")
             completed = False
             if completed is False:
                 try:
@@ -323,6 +340,7 @@ def InitializeTraining(command_queue, log_queue, conf):
                     completed = True
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
                     print("Ipfy.org took too long, trying another domain.")
+                    log_queue.put("Ipfy.org took too long, trying another domain.")
             if completed is False:
                 try:
                     ip = requests.get("https://ipv4.icanhazip.com/", timeout=5).text
@@ -330,6 +348,7 @@ def InitializeTraining(command_queue, log_queue, conf):
                     completed = True
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
                     print("Icanhazip.com took too long, trying another domain.")
+                    log_queue.put("Icanhazip.com took too long, trying another domain.")
             if completed is False:
                 try:
                     tmpjson = json.loads(requests.get("https://jsonip.com/", timeout=5).content)
@@ -338,8 +357,10 @@ def InitializeTraining(command_queue, log_queue, conf):
                     completed = True
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
                     print("Jsonip.com took too long, ran out of alternatives.")
+                    log_queue.put("Jsonip.com took too long, ran out of alternatives.")
                     raise(ConnectionError)
         else:
+            log_queue.put("Loading public IP from configuration")
             ip = conf.publicip
             ipsrc = "config"
         
@@ -348,6 +369,7 @@ def InitializeTraining(command_queue, log_queue, conf):
             ip = ipaddress.ip_address(ip)
             ip = str(ip)
         except Exception:
+            log_queue("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
             raise ValueError("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
 
         public_maddrs_tcp = "/ip4/" + ip + "/tcp/" + str(conf.external_tcp)
@@ -378,8 +400,8 @@ def InitializeTraining(command_queue, log_queue, conf):
     optimizer = hivemind.Optimizer(
         dht=dht,
         run_id="testrun",
-        batch_size_per_step=1,
-        target_batch_size=4000,
+        batch_size_per_step=(1 * int(conf.batchSize)),
+        target_batch_size=75000,
         optimizer=tmp_optimizer,
         use_local_updates=False,
         matchmaking_time=260.0,
@@ -396,6 +418,10 @@ def InitializeTraining(command_queue, log_queue, conf):
 
     print('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
     print("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
+    log_queue.put("Hivemind Optimizer and DHT started successfully!")
+    log_queue.put("You can share the following initial_perrs to other nodes so they connect directly through this node:")
+    log_queue.put('\n'.join(str(addr) for addr in dht.get_visible_maddrs()))
+    log_queue.put("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
 
     #statistics
     if conf.enablestats:
@@ -403,11 +429,14 @@ def InitializeTraining(command_queue, log_queue, conf):
         bandwidthstats = {}
         specs_stats = {}
         print("Stats enabled")
+        log_queue.put("Public Telemetry enabled.")
 
         if conf.geoaprox:
+            log_queue.put("Geolocation Aproximation enabled (server-side)")
             statconfig['geoaprox'] = True
 
         if conf.bandwidth:
+            log_queue.put("Bandwidth enabled (client-side)")
             statconfig["bandwidth"] = True
             import speedtest
             session = speedtest.Speedtest()
@@ -417,6 +446,7 @@ def InitializeTraining(command_queue, log_queue, conf):
             bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
 
         if conf.specs:
+            log_queue.put("Specs enabled (client-side)")
             statconfig["specs"] = True
             # GPU
             # https://docs.nvidia.com/deploy/nvml-api/index.html
@@ -508,7 +538,10 @@ def InitializeTraining(command_queue, log_queue, conf):
         print(statsjson)
         pstats = requests.post('http://' + conf.server + '/v1/post/stats', json=json.dumps(statsjson))
         if pstats.status_code != 200:
+            log_queue.put("Failed to report telemetry")
             raise ConnectionError("Failed to report stats")
+        else:
+            log_queue.put("Telemetry reported successfully")
    
     # create ema
     if conf.everyone.use_ema:
@@ -530,6 +563,7 @@ def InitializeTraining(command_queue, log_queue, conf):
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
+            log_queue.put(f'saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{global_step}')
             print(f'saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{global_step}')
             pipeline.save_pretrained(f'{conf.intern.workingdir}/{"hivemind"}_{global_step}')
 
@@ -540,6 +574,7 @@ def InitializeTraining(command_queue, log_queue, conf):
     try:
         already_done_steps = (optimizer.tracker.global_progress.samples_accumulated + (optimizer.tracker.global_progress.epoch * optimizer.target_batch_size))
         print("Skipping", already_done_steps, "steps on the LR Scheduler.")
+        log_queue.put("Skipping " + str(already_done_steps) + " steps on the LR Scheduler.")
         for i in range(already_done_steps):
             lr_scheduler.step()
         print("Done")
@@ -565,6 +600,7 @@ def InitializeTraining(command_queue, log_queue, conf):
                     if command == 'stop':
                         # Start training
                         print('Stopping training...')
+                        log_queue.put("Stopping training...")
                         raise StopTrainingException("Recieved Stop Training Command.")
                 
                 b_start = time.perf_counter()
@@ -652,6 +688,13 @@ def InitializeTraining(command_queue, log_queue, conf):
                     }
                     progress_bar.set_postfix(logs)
                     run.log(logs, step=global_step)
+                    if global_step % 10 == 0 and global_step > 0:
+                        first_str_to_log = "steps/s: " + str(steps_per_second) + " imgs/s: " + str(rank_images_per_second) + " imgs seen: " + str(samples_seen)
+                        second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(lr_scheduler.get_last_lr()[0]) + " step: " + str(global_step)
+                        first_opt_log = str(optimizer.tracker.global_progress)
+                        log_queue.put(first_str_to_log)
+                        log_queue.put(second_str_to_log)
+                        log_queue.put(first_opt_log)
                     #tqdm_out = progress_bar.format_dict()
                     #print(str(tqdm_out))
                     # if counter < 5:
@@ -736,6 +779,7 @@ def InitializeTraining(command_queue, log_queue, conf):
     except StopTrainingException as e:
         print("Stopping Training upon user request")
         print("TRAINING_STOPPED")
+        log_queue.put("TRAINING STOPPED")
         pass
     except Exception as e:
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
@@ -748,6 +792,7 @@ def InitializeTraining(command_queue, log_queue, conf):
     print(get_gpu_ram())
     print('Done!')
     print("TRAINING_FINISHED")
+    log_queue.put("TRAINING FINISHED")
     exit()
 
 def PyTorchTrainer(command_queue, log_queue):
