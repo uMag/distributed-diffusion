@@ -143,4 +143,5 @@ def handle_stop():
 if __name__ == '__main__':
   log_queue = Queue()
   command_queue = Queue()
-  socketio.run(app)
+  socketio.run(app,host="0.0.0.0")
+  
