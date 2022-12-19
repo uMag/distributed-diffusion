@@ -44,9 +44,7 @@ Documentation on how to setup your own swarm will be available soon!
 
 # Contributing & Support
 
-All contributions are welcome! Currently I'm the only developer in this project so I would be happy for more people to join!
-
-Patreon: https://patreon.com/sailabs
+All contributions are welcome!
 
 If you need help, or want to know more about the project, join the discord: https://discord.gg/8Sh2T6gjd2
 
