@@ -628,35 +628,21 @@ def InitializeTraining(command_queue, log_queue, conf):
                 else:
                     raise ValueError(f"Unknown prediction type: {noise_scheduler.config.prediction_type}")
 
-                if not conf.everyone.train_text_encoder:
-                    # Predict the noise residual and compute loss
-                    with torch.autocast('cuda', enabled=conf.everyone.fp16):
-                        noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-                        
-                    loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+                # Predict the noise residual and compute loss
+                with torch.autocast('cuda', enabled=conf.everyone.fp16):
+                    noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
 
-                    # backprop and update
-                    scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    lr_scheduler.step()
-                    optimizer.zero_grad()
-                else:
-                    # Predict the noise residual and compute loss
-                    with torch.autocast('cuda', enabled=conf.everyone.fp16):
-                        noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-                        
-                    loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
+                loss = torch.nn.functional.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
-                    # backprop and update
-                    scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                # backprop and update
+                scaler.scale(loss).backward()
+                torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+                if conf.everyone.train_text_encoder:
                     torch.nn.utils.clip_grad_norm_(text_encoder.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    lr_scheduler.step()
-                    optimizer.zero_grad()                    
+                scaler.step(optimizer)
+                scaler.update()
+                lr_scheduler.step()
+                optimizer.zero_grad()
 
                 # Update EMA
                 if conf.everyone.use_ema:
