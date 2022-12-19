@@ -212,7 +212,7 @@ def pingpost():
 @app.route("/v1/get/config")
 def getconf():
     #TODO: make it so its a omegaconf obj, conv to dict
-    # recieve the dict on local (peer) server, conv back to
+    # receive the dict on local (peer) server, conv back to
     # omegaconf obj, and append to existing conf
     dict_with_configuration = {
         "model": "runwayml/stable-diffusion-v1-5",
