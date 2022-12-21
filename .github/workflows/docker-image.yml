@@ -12,26 +12,21 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    steps:
-#     Set global environment variables:
-      - uses: actions/checkout@master
-      - name: set global env
-        id: global_env
-        run: |
-          REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[A-Z]' '[a-z]')
-          echo "::set-output name=IMAGE_NAME::${REPOSITORY#*/}"
-          echo "::set-output name=DOCKERHUB_IMAGE_NAME::ghcr.io/${REPOSITORY}"
-
-#     Build Docker image:
-      - name: Build and tag image
-        run: |
-          docker build -t "${{ steps.global_env.outputs.DOCKERHUB_IMAGE_NAME }}:latest" -t "${{ steps.global_env.outputs.DOCKERHUB_IMAGE_NAME }}:${GITHUB_SHA::8}" .
-
-      - name: Docker login
-        run: docker login ghcr.io -u $GITHUB_ACTOR -p $GITHUB_TOKEN
-
-#     Publish image to github package repository:
-      - name: Publish image
-        run: docker push "${{steps.global_env.outputs.DOCKERHUB_IMAGE_NAME}}"
-        
+    steps:      
+      - uses: docker/metadata-action@v3
+        id: metadata
+        with:
+          images: ghcr.io/${{ github.repository }}
+      - uses: int128/docker-build-cache-config-action@v1
+        id: cache
+        with:
+          image: ghcr.io/${{ github.repository }}/cache
+      - uses: docker/build-push-action@v2
+        id: build
+        with:
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: ${{ steps.cache.outputs.cache-from }}
+          cache-to: ${{ steps.cache.outputs.cache-to }}  
         
