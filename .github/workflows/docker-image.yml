@@ -14,6 +14,7 @@ jobs:
 
     steps:
 #     Set global environment variables:
+      - uses: actions/checkout@master
       - name: set global env
         id: global_env
         run: |
