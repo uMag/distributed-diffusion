@@ -55,7 +55,7 @@ class Validation():
                 return False
             print(f'WARNING: Image cannot be opened: {error}')
             return False
-        except:
+        except Exception as error:
             print(f'WARNING: Image cannot be opened: {error}')
             return False
 
