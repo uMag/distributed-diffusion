@@ -10,4 +10,4 @@ dependencies:
   - pytorch-cuda=11.7 
   - xformers
   - einops
-  - pyre-extensions=0.0.23
+  - pyre-extensions
