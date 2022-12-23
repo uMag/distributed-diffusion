@@ -7,6 +7,13 @@ on:
     branches: [ "main" ]
     types:
       - closed
+  workflow_dispatch:
+    branches: [ "main" ]
+    inputs:
+      build-image:
+        description: 'Build Image (y/n)?'
+        required: true
+        default: 'y'
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -15,7 +22,7 @@ env:
 
 jobs:
   if_merged:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true || github.event.inputs.build-image == 'y'
     runs-on: ubuntu-latest
 
     steps:
@@ -43,6 +50,10 @@ jobs:
         id: metadata
         with:
           images: ghcr.io/${{github.repository}}
+          tags: |
+            # set latest tag for default branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
       - uses: int128/docker-build-cache-config-action@v1
         id: cache
         with:
