@@ -9,4 +9,3 @@ dependencies:
   - flask
   - pytorch-cuda=11.7 
   - xformers
-  - einops

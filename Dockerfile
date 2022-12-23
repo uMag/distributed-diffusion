@@ -11,9 +11,10 @@ ADD ./environment.yml /tmp/env.yml
 ENV PATH /opt/conda/bin:$PATH
 RUN --mount=type=cache,target=/opt/conda/pkgs conda env create -f /tmp/env.yml
 # Make RUN commands use the new environment:
-ADD . /distributed-training
+COPY requirements.txt .
 SHELL ["conda", "run", "-n", "venv", "/bin/bash", "-c"]
-WORKDIR /distributed-training
 RUN --mount=type=cache,target=~/.cache pip install -r requirements.txt
+ADD . /distributed-training
+WORKDIR /distributed-training
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "venv", "python", "server.py"]
 EXPOSE 5000
