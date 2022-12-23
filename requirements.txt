@@ -18,3 +18,4 @@ triton==2.0.0.dev20221120
 omegaconf
 flask
 Flask-SocketIO
+pyre-extensions
