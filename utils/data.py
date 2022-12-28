@@ -180,7 +180,7 @@ class SimpleBucket(torch.utils.data.Sampler):
             max_image_area: int = 512 ** 2,
             image_side_min: Optional[int] = None,
             image_side_max: Optional[int] = None,
-            fixed_size: Optional[tuple[int, int]] = None
+            fixed_size: Optional[tuple(int, int)] = None
     ):
         super().__init__(None)
         self.batch_size = batch_size

@@ -9,6 +9,39 @@ from io import BytesIO
 from datetime import datetime
 import threading
 
+
+import sqlite3
+import random
+
+# Connect to the database
+conn = sqlite3.connect('danbooru.db')
+cursor = conn.cursor()
+
+# Load the posts table into memory
+cursor.execute('SELECT * FROM posts')
+posts = cursor.fetchall()
+
+def select_random_post():
+  # Select a random record from the posts table
+  random_post = random.choice(posts)
+  post_id = random_post[0]
+  image_ext = random_post[1]
+  rating = random_post[2]
+  
+  # Return the post_id, image_ext, and rating
+  return post_id, image_ext, rating
+
+# Get the total number of rows in the posts table
+cursor.execute('SELECT COUNT(*) FROM posts')
+num_rows = cursor.fetchone()[0]
+
+def get_num_rows():
+    return num_rows
+
+# Close the connection to the database
+conn.close()
+
+
 parser = argparse.ArgumentParser(description='Dataset server')
 parser.add_argument('--dataset', type=str, default=None, required=True, help='Path to dataset')
 #TODO: make these work
@@ -241,7 +274,7 @@ def getconf():
 @app.route('/v1/get/lr_schel_conf')
 def get_lr_conf():
     info = {
-        "ImagesPerEpoch": numberFiles,
+        "ImagesPerEpoch": str(get_num_rows()),
         "Epochs": "10",
     }
     return jsonify(info)
