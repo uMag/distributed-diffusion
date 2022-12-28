@@ -154,6 +154,8 @@ def setuphivemind(conf, log_queue):
     #     log_queue.put("Unable to connect to the dataset server")
     #     raise ConnectionError("Unable to connect to server")
 
+import threading
+
 def getchunk(amount, conf, log_queue):
     log_queue.put("Requesting Chunks")
     if os.path.isdir(conf.intern.tmpdataset):
@@ -161,21 +163,31 @@ def getchunk(amount, conf, log_queue):
     os.mkdir(conf.intern.tmpdataset)
     
     # Select 500 random records from the posts table
-    random_posts = [select_random_post() for _ in range(amount)]
+    random_posts = [select_random_post() for _ in range(int(amount))]
     
+    threads = []
     for post_id, image_ext, rating in random_posts:
-        # Download the image
-        image_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.{image_ext}"
-        image_response = requests.get(image_url)
-        open(f"{conf.intern.tmpdataset}/{post_id}.{image_ext}", 'wb').write(image_response.content)
-        
-        # Download the tags
-        tags_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.json"
-        tags_response = requests.get(tags_url).json()
-        tags = tags_response['tags']
-        open(f"{conf.intern.tmpdataset}/{post_id}.txt", 'w').write(', '.join(tags))
+        t = threading.Thread(target=download_image, args=(post_id, image_ext, conf, log_queue))
+        threads.append(t)
+        t.start()
+    
+    for t in threads:
+        t.join()
     
     log_queue.put("Chunks ready")
+
+def download_image(post_id, image_ext, conf, log_queue):
+    print("Downloading some image...")
+    # Download the image
+    image_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.{image_ext}"
+    image_response = requests.get(image_url)
+    open(f"{conf.intern.tmpdataset}/{post_id}.{image_ext}", 'wb').write(image_response.content)
+
+    # Download the tags
+    tags_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.json"
+    tags_response = requests.get(tags_url).json()
+    tags = tags_response['tags']
+    open(f"{conf.intern.tmpdataset}/{post_id}.txt", 'w').write(', '.join(tags))
 
 def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queue):
     # load dataset

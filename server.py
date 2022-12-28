@@ -56,7 +56,7 @@ def submit_conf():
   conf.intern.tmpdataset = conf.intern.workingdir + "/dataset"
   conf.image_store_skip = True
   conf.image_store_extended = False
-  conf.image_store_resize = False
+  conf.image_store_resize = True # <--- Slow as fuck
   conf.image_store_no_migration = True
   conf.image_inference_scheduler = 'DDIMScheduler'
   print(conf.server)
