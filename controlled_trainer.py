@@ -67,6 +67,37 @@ import omegaconf
 import torch
 import time
 
+import sqlite3
+import random
+
+# Connect to the database
+conn = sqlite3.connect('danbooru.db')
+cursor = conn.cursor()
+
+# Load the posts table into memory
+cursor.execute('SELECT * FROM posts')
+posts = cursor.fetchall()
+
+def select_random_post():
+  # Select a random record from the posts table
+  random_post = random.choice(posts)
+  post_id = random_post[0]
+  image_ext = random_post[1]
+  rating = random_post[2]
+  
+  # Return the post_id, image_ext, and rating
+  return post_id, image_ext, rating
+
+# Get the total number of rows in the posts table
+cursor.execute('SELECT COUNT(*) FROM posts')
+num_rows = cursor.fetchone()[0]
+
+def get_num_rows():
+    return num_rows
+
+# Close the connection to the database
+conn.close()
+
 class StopTrainingException(Exception):
     pass
 
@@ -111,43 +142,40 @@ def setuphivemind(conf, log_queue):
         shutil.rmtree(conf.intern.workingdir)
     os.makedirs(conf.intern.workingdir)
 
-    if requests.get('http://' + conf.server + '/info').status_code == 200:
-        print("Connection Success")
-        log_queue.put("Connected to the dataset server, retrieving lr_scheduler configuration")
-        serverconfig = json.loads(requests.get('http://' + conf.server + '/v1/get/lr_schel_conf').content)
-        print(serverconfig)
-        imgs_per_epoch = int(serverconfig["ImagesPerEpoch"])
-        total_epochs = int(serverconfig["Epochs"])
-        return(imgs_per_epoch, total_epochs)
-    else:
-        log_queue.put("Unable to connect to the dataset server")
-        raise ConnectionError("Unable to connect to server")
+    # if requests.get('http://' + conf.server + '/info').status_code == 200:
+    #     print("Connection Success")
+    #     log_queue.put("Connected to the dataset server, retrieving lr_scheduler configuration")
+    #     serverconfig = json.loads(requests.get('http://' + conf.server + '/v1/get/lr_schel_conf').content)
+    #     print(serverconfig)
+    #     imgs_per_epoch = int(serverconfig["ImagesPerEpoch"])
+    #     total_epochs = int(serverconfig["Epochs"])
+    #     return(imgs_per_epoch, total_epochs)
+    # else:
+    #     log_queue.put("Unable to connect to the dataset server")
+    #     raise ConnectionError("Unable to connect to server")
 
-def getchunk(server, amount, conf, log_queue):
+def getchunk(amount, conf, log_queue):
     log_queue.put("Requesting Chunks")
     if os.path.isdir(conf.intern.tmpdataset):
         shutil.rmtree(conf.intern.tmpdataset)
     os.mkdir(conf.intern.tmpdataset)
-    serverdomain = 'http://' + server
-    rtasks_url = serverdomain + '/v1/get/tasks/' + str(amount)
-    rtasks = requests.get(rtasks_url).json()
-    log_queue.put("Request success, Downloading files")
-    print("Downloading Files")
-    pfiles = requests.post(serverdomain + '/v1/get/files', json=rtasks)
-    tmpZip = conf.intern.workingdir + '/tmp.zip'
-    open(tmpZip, 'wb').write(pfiles.content)
     
-    zipfile.ZipFile(tmpZip, 'r').extractall(conf.intern.tmpdataset)
-    os.remove(tmpZip)
+    # Select 500 random records from the posts table
+    random_posts = [select_random_post() for _ in range(amount)]
+    
+    for post_id, image_ext, rating in random_posts:
+        # Download the image
+        image_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.{image_ext}"
+        image_response = requests.get(image_url)
+        open(f"{conf.intern.tmpdataset}/{post_id}.{image_ext}", 'wb').write(image_response.content)
+        
+        # Download the tags
+        tags_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.json"
+        tags_response = requests.get(tags_url).json()
+        tags = tags_response['tags']
+        open(f"{conf.intern.tmpdataset}/{post_id}.txt", 'w').write(', '.join(tags))
+    
     log_queue.put("Chunks ready")
-    return(rtasks)
-
-def report(server, tasks):
-    preport = requests.post('http://' + server + '/v1/post/epochcount', json=tasks)
-    if preport.status_code == 200:
-        return True
-    else:
-        return False
 
 def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queue):
     # load dataset
@@ -183,7 +211,8 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
 
 
 def InitializeTraining(command_queue, log_queue, conf):
-    imgs_per_epoch, total_epochs = setuphivemind(conf, log_queue)
+    imgs_per_epoch = get_num_rows()
+    total_epochs = 10
     config = omegaconf.OmegaConf.create(conf)
     rank = 0
 
@@ -583,7 +612,7 @@ def InitializeTraining(command_queue, log_queue, conf):
         while True:
             print(get_gpu_ram())
             #only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
-            recipt = getchunk(conf.server, conf.imageCount, conf, log_queue)
+            getchunk(conf.imageCount, conf, log_queue)
 
             #Note: we removed worldsize here
             train_dataloader = dataloader(tokenizer, text_encoder, device, 1, rank, conf, log_queue)
@@ -757,11 +786,6 @@ def InitializeTraining(command_queue, log_queue, conf):
                             # cleanup so we don't run out of memory
                             del pipeline
                             gc.collect()
-            sreport = report(conf.server, recipt)
-            if sreport is True:
-                print("Report Success")
-            else:
-                raise ConnectionError("Couldn't report")
     except StopTrainingException as e:
         print("Stopping Training upon user request")
         print("TRAINING_STOPPED")
