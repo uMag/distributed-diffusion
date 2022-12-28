@@ -32,7 +32,7 @@ def submit_conf():
   conf.imageCount = data['imageCount']
   conf.batchSize = data['batchSize']
   conf.hftoken = data['hftoken']
-  conf.savesteps = data['savesteps']
+  # conf.savesteps = data['savesteps']
   conf.gradckpt = data['gradckpt']
   conf.xformers = data['xformers']
   conf.eightbitadam = data['eightbitadam']
@@ -139,6 +139,11 @@ def handle_start():
 def handle_stop():
   log_queue.put('TRAINER_MANAGER: Sending stop command to trainer.')
   command_queue.put('stop')
+
+@socketio.on('save')
+def handle_save():
+  log_queue.put('TRAINER_MANAGER: Sending save command to trainer.')
+  command_queue.put('save')
 
 if __name__ == '__main__':
   log_queue = Queue()

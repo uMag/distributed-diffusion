@@ -15,11 +15,12 @@
     <div class="flex flex-col items-center">
       <img src="/static/snail_gang.png" class="mx-auto" alt="Dandelion" />
       <div class="mx-auto flex justify-center">
-        <button id="start_btn" onclick="start_trainer()" class="focus:shadow-outline m-2 rounded bg-green-500 py-2 px-4 font-bold text-white hover:bg-green-700 focus:outline-none">Start Training</button>
+        <button id="start_btn" class="focus:shadow-outline m-2 rounded bg-green-500 py-2 px-4 font-bold text-white hover:bg-green-700 focus:outline-none">Start Training</button>
       </div>
       <div class="mx-auto flex justify-center">
         <button id="stop_btn" class="focus:shadow-outline m-2 rounded bg-red-500 py-2 px-4 font-bold text-white hover:bg-red-900 focus:outline-none">Stop</button>
-      </div>
+        <button id="save_btn" class="focus:shadow-outline m-2 rounded bg-blue-500 py-2 px-4 font-bold text-white hover:bg-blue-900 focus:outline-none">Save</button>
+      </div>      
     </div>
   </div>
   <style>
@@ -81,9 +82,10 @@
       socket.emit('stop');
     };
 
-    function start_trainer() {
-      socket.emit('start');
-    }
+    // Send the "save" event when the save button is clicked
+    document.getElementById('save_btn').onclick = function() {
+      socket.emit('save');
+    };
 
   </script>
 </body>

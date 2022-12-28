@@ -29,8 +29,8 @@
       <div class="flex flex-col items-center">
         <label for="hf_token" class="sr-only">HF Token</label>
         <input type="text" id="hf_token" class="m-2 rounded border p-2" placeholder="HF Token" />
-        <label for="save_steps" class="sr-only">Save Steps</label>
-        <input type="number" id="save_steps" class="m-2 rounded border p-2" placeholder="Save Steps" />
+        <!-- <label for="save_steps" class="sr-only">Save Steps</label>
+        <input type="number" id="save_steps" class="m-2 rounded border p-2" placeholder="Save Steps" /> -->
         <label for="gradient_checkpointing" class="flex items-center">
           <input type="checkbox" id="gradient_checkpointing" class="m-2 rounded border p-2" placeholder="Gradient Checkpointing"/>
           <span>Gradient Checkpointing</span>
@@ -124,7 +124,7 @@
             const imageCount = document.getElementById('image_count').value;
             const batchSize = document.getElementById('batch_size').value;
             const hftoken = document.getElementById('hf_token').value;
-            const savesteps = document.getElementById('save_steps').value;
+            // const savesteps = document.getElementById('save_steps').value;
             const gradckpt = document.getElementById('gradient_checkpointing').checked;
             const xformers = document.getElementById('xformers').checked;
             const eightbitadam = document.getElementById('8bit_adam').checked;
@@ -148,7 +148,7 @@
                 imageCount: imageCount,
                 batchSize: batchSize,
                 hftoken: hftoken,
-                savesteps: savesteps,
+                // savesteps: savesteps,
                 gradckpt: gradckpt,
                 xformers: xformers,
                 eightbitadam: eightbitadam,
@@ -209,9 +209,9 @@
             if (data.hftoken) {
               document.getElementById('hf_token').value = data.hftoken;
             }
-            if (data.savesteps) {
-              document.getElementById('save_steps').value = data.savesteps;
-            }
+            // if (data.savesteps) {
+            //   document.getElementById('save_steps').value = data.savesteps;
+            // }
             if (data.gradckpt) {
               document.getElementById('gradient_checkpointing').checked = data.gradckpt;
             }

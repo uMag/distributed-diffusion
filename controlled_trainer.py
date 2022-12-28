@@ -38,6 +38,7 @@ import multiprocessing
 from typing import Optional
 from functools import reduce
 import pickle
+from datetime import datetime
 
 try:
     pynvml.nvmlInit()
@@ -177,7 +178,6 @@ def getchunk(amount, conf, log_queue):
     log_queue.put("Chunks ready")
 
 def download_image(post_id, image_ext, conf, log_queue):
-    print("Downloading some image...")
     # Download the image
     image_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.{image_ext}"
     image_response = requests.get(image_url)
@@ -590,7 +590,9 @@ def InitializeTraining(command_queue, log_queue, conf):
 
     print(get_gpu_ram())
 
-    def save_checkpoint(global_step):
+    def save_checkpoint():
+        now = datetime.now()
+        time_str = now.strftime("%Y-%m-%d-%H-%M-%S")
         if rank == 0:
             if conf.everyone.use_ema:
                 ema_unet.store(unet.parameters())
@@ -604,9 +606,11 @@ def InitializeTraining(command_queue, log_queue, conf):
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
-            log_queue.put(f'saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{global_step}')
-            print(f'saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{global_step}')
-            pipeline.save_pretrained(f'{conf.intern.workingdir}/{"hivemind"}_{global_step}')
+            log_queue.put(f'Saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{time_str}')
+            print(f'Saving checkpoint to: {conf.intern.workingdir}/{"hivemind"}_{time_str}')
+            pipeline.save_pretrained(f'{conf.intern.workingdir}/{"hivemind"}_{time_str}')
+            print("Checkpoint Saved")
+            log_queue.put("Checkpoint Saved")
 
             if conf.everyone.use_ema:
                 ema_unet.restore(unet.parameters())
@@ -623,6 +627,7 @@ def InitializeTraining(command_queue, log_queue, conf):
         global_step = 0
         while True:
             print(get_gpu_ram())
+            print("Getting chunks")
             #only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
             getchunk(conf.imageCount, conf, log_queue)
 
@@ -643,6 +648,11 @@ def InitializeTraining(command_queue, log_queue, conf):
                         print('Stopping training...')
                         log_queue.put("Stopping training...")
                         raise StopTrainingException("Recieved Stop Training Command.")
+                    elif command == 'save':
+                        # Save the model
+                        print('Saving Checkpoint...')
+                        log_queue.put("Saving Checkpoint...")
+                        save_checkpoint()
                 
                 b_start = time.perf_counter()
                 latents = vae.encode(batch['pixel_values'].to(device, dtype=weight_dtype)).latent_dist.sample()
@@ -734,9 +744,6 @@ def InitializeTraining(command_queue, log_queue, conf):
                     #     print(data)
                     #     counter = 0
                     #Thread(target=backgroundreport, args=(("http://" + conf.server + "/v1/post/ping"), "world_images_per_second")).start()
-
-                if global_step % int(conf.savesteps) == 0 and global_step > 0:
-                    save_checkpoint(global_step)
                     
                 if conf.enable_inference:
                     #hardcoded
@@ -779,7 +786,6 @@ def InitializeTraining(command_queue, log_queue, conf):
                                                 caption=prompt)
                                             )
                                         else:
-                                            from datetime import datetime
                                             #hardcoded
                                             images = pipeline(prompt, num_inference_steps=30).images[0]
                                             filenameImg = str(time.time_ns()) + ".png"
@@ -807,7 +813,7 @@ def InitializeTraining(command_queue, log_queue, conf):
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
         pass
 
-    save_checkpoint(global_step)
+    save_checkpoint()
 
     #cleanup()
 
