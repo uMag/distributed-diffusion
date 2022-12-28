@@ -362,9 +362,10 @@ def InitializeTraining(command_queue, log_queue, conf):
         client_mode = False
 
         # set local maddrs ports
-        host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(conf.internal_udp)
-        host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(conf.internal_tcp) + "/quic"
-        host_maddrs_full = [host_maddrs_tcp, host_maddrs_udp]
+        host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(conf.internal_tcp)
+        # host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(conf.internal_udp) + "/quic"
+        # host_maddrs_full = [host_maddrs_tcp, host_maddrs_udp]
+        host_maddrs_full = [host_maddrs_tcp]
 
         # set public to-be-announced maddrs
         # get public ip
@@ -414,8 +415,9 @@ def InitializeTraining(command_queue, log_queue, conf):
             raise ValueError("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
 
         public_maddrs_tcp = "/ip4/" + ip + "/tcp/" + str(conf.external_tcp)
-        public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
-        public_maddrs_full = [public_maddrs_tcp, public_maddrs_udp]
+        # public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
+        # public_maddrs_full = [public_maddrs_tcp, public_maddrs_udp]
+        public_maddrs_full = [public_maddrs_tcp]
 
     #init dht
     dht = hivemind.DHT(
@@ -830,6 +832,10 @@ def PyTorchTrainer(command_queue, log_queue):
         command = command_queue.get()
         if command == 'start':
             print('Starting Training!')
+            # info: we had some issues while passing the conf to the
+            # thread, so instead we pickle it here. Please note, that
+            # this pickle could include sensitive data such as your
+            # HuggingFace Token.
             with open("DO_NOT_DELETE_config.pickle", 'rb') as f:
                     conf = pickle.load(f)
             #stop is gonna be done inside the function, must change this later

@@ -82,15 +82,15 @@
           <div class="flex flex-col items-center">
             <label for="internal_ports">Internal Ports</label>
             <div class="mx-auto flex justify-center">
-              <label for="internal_udp" class="sr-only">Internal UCP Port</label>
-              <input type="text" id="internal_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" />
+              <!-- <label for="internal_udp" class="sr-only">Internal UCP Port</label>
+              <input type="text" id="internal_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" /> -->
               <label for="internal_tcp" class="sr-only">Internal TCP Port</label>
               <input type="text" id="internal_tcp" class="m-2 w-14 rounded border p-1" placeholder="TCP" />
             </div>
             <label for="external_ports">External Ports</label>
             <div class="mx-auto flex justify-center">
-              <label for="external_udp" class="sr-only">External UCP Port</label>
-              <input type="text" id="external_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" />
+              <!-- <label for="external_udp" class="sr-only">External UCP Port</label>
+              <input type="text" id="external_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" /> -->
               <label for="external_tcp" class="sr-only">External TCP Port</label>
               <input type="text" id="external_tcp" class="m-2 w-14 rounded border p-1" placeholder="TCP" />
             </div>
@@ -134,9 +134,9 @@
             const specs = document.getElementById('specs').checked;
             const trainermode = document.getElementById('trainer_mode').value;
             const publicip = document.getElementById('public_ip').value;
-            const internal_udp = document.getElementById('internal_udp').value;
+            // const internal_udp = document.getElementById('internal_udp').value;
             const internal_tcp = document.getElementById('internal_tcp').value;
-            const external_udp = document.getElementById('external_udp').value;
+            // const external_udp = document.getElementById('external_udp').value;
             const external_tcp = document.getElementById('external_tcp').value;
             const enable_wandb = document.getElementById('enable_wandb').checked;
             const wandb_token = document.getElementById('wandb_token').value;
@@ -158,9 +158,9 @@
                 specs: specs,
                 trainermode: trainermode,
                 publicip: publicip,
-                internal_udp: internal_udp,
+                // internal_udp: internal_udp,
                 internal_tcp: internal_tcp,
-                external_udp: external_udp,
+                // external_udp: external_udp,
                 external_tcp: external_tcp,
                 enable_wandb: enable_wandb,
                 wandb_token: wandb_token,
@@ -239,15 +239,15 @@
             if (data.publicip) {
             document.getElementById('public_ip').value = data.publicip;
             }
-            if (data.internal_udp) {
-            document.getElementById('internal_udp').value = data.internal_udp;
-            }
+            // if (data.internal_udp) {
+            // document.getElementById('internal_udp').value = data.internal_udp;
+            // }
             if (data.internal_tcp) {
             document.getElementById('internal_tcp').value = data.internal_tcp;
             }
-            if (data.external_udp) {
-            document.getElementById('external_udp').value = data.external_udp;
-            }
+            // if (data.external_udp) {
+            // document.getElementById('external_udp').value = data.external_udp;
+            // }
             if (data.external_tcp) {
             document.getElementById('external_tcp').value = data.external_tcp;
             }
@@ -268,22 +268,22 @@
 	<script>
         function updateInputFields() {
             var trainerMode = document.getElementById('trainer_mode').value;
-            var internalUdpInput = document.getElementById('internal_udp');
+            // var internalUdpInput = document.getElementById('internal_udp');
             var internalTcpInput = document.getElementById('internal_tcp');
-            var externalUdpInput = document.getElementById('external_udp');
+            // var externalUdpInput = document.getElementById('external_udp');
             var externalTcpInput = document.getElementById('external_tcp');
             var publicIpInput = document.getElementById('public_ip');
             
             if (trainerMode === 'Client') {
-            internalUdpInput.disabled = true;
+            // internalUdpInput.disabled = true;
             internalTcpInput.disabled = true;
-            externalUdpInput.disabled = true;
+            // externalUdpInput.disabled = true;
             externalTcpInput.disabled = true;
             publicIpInput.disabled = true;
             } else {
-            internalUdpInput.disabled = false;
+            // internalUdpInput.disabled = false;
             internalTcpInput.disabled = false;
-            externalUdpInput.disabled = false;
+            // externalUdpInput.disabled = false;
             externalTcpInput.disabled = false;
             publicIpInput.disabled = false;
             }
