@@ -258,6 +258,7 @@ def informationExchangeServer(conf, maddrs):
 
 
 class DistributedTrainer:
+    """The core trainer for SD, distributed over the Hivemind"""
 
     def __init__(self, _command_queue, _log_queue, _conf):
         self.command_queue = _command_queue
@@ -347,21 +348,6 @@ class DistributedTrainer:
         self.optimizer_parameters = self.unet.parameters() if not self.conf.everyone.train_text_encoder else itertools.chain(
             self.unet.parameters(), self.text_encoder.parameters())
 
-        # Create distributed optimizer
-        # from torch.distributed.optim import ZeroRedundancyOptimizer
-        # we changed to cls for single gpu training
-        print("Stating standard optimizer")
-        tmp_optimizer = self.optimizer_cls(
-            self.optimizer_parameters,
-            # optimizer_class=optimizer_cls,
-            # parameters_as_bucket_view=True,
-            lr=float(self.conf.everyone.lr),
-            betas=(float(self.conf.everyone.opt_betas_one), float(self.conf.everyone.opt_betas_two)),
-            eps=float(self.conf.everyone.opt_epsilon),
-            weight_decay=float(self.conf.everyone.opt_weight_decay),
-        )
-        print("Finished standard optimizer")
-
         self.noise_scheduler = DDPMScheduler.from_pretrained(
             self.conf.everyone.model,
             subfolder='scheduler',
@@ -373,26 +359,26 @@ class DistributedTrainer:
         if MOTHER is False:
             rmaddrs_rq = requests.get('http://' + self.conf.server + "/peer")
             if rmaddrs_rq.status_code == 200:
-                self.peer_list = json.loads(rmaddrs_rq.content)
+                _peer_list = json.loads(rmaddrs_rq.content)
             else:
                 self.log_queue.put("Unable to obtain peers from server")
                 raise ConnectionError("Unable to obtain peers from server")
         else:
-            self.peer_list = None
+            _peer_list = None
 
         self.log_queue.put("Trainer set to " + self.conf.trainermode + " mode")
         if self.conf.trainermode == "Client":
-            self.client_mode = True
-            self.host_maddrs_full = None
-            self.public_maddrs_full = None
+            _client_mode = True
+            _host_maddrs_full = None
+            _public_maddrs_full = None
         elif self.conf.trainermode == "Relay":
-            self.client_mode = False
+            _client_mode = False
 
             # set local maddrs ports
-            self.host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(self.conf.internal_tcp)
+            host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(self.conf.internal_tcp)
             # host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(conf.internal_udp) + "/quic"
             # host_maddrs_full = [host_maddrs_tcp, host_maddrs_udp]
-            self.host_maddrs_full = [self.host_maddrs_tcp]
+            _host_maddrs_full = [host_maddrs_tcp]
 
             # set public to-be-announced maddrs
             # get public ip
@@ -417,21 +403,36 @@ class DistributedTrainer:
             public_maddrs_tcp = "/ip4/" + self.ip + "/tcp/" + str(self.conf.external_tcp)
             # public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
             # public_maddrs_full = [public_maddrs_tcp, public_maddrs_udp]
-            public_maddrs_full = [public_maddrs_tcp]
+            _public_maddrs_full = [public_maddrs_tcp]
         else:
             raise ValueError(f"Trainer mode {self.conf.trainermode} currently not supported")
 
         # init dht
         self.dht = hivemind.DHT(
-            host_maddrs=self.host_maddrs_full,
-            initial_peers=self.peer_list,
+            host_maddrs=_host_maddrs_full,
+            initial_peers=_peer_list,
             start=True,
-            announce_maddrs=public_maddrs_full,
-            client_mode=self.client_mode,
+            announce_maddrs=_public_maddrs_full,
+            client_mode=_client_mode,
         )
 
         # set compression and optimizer
         _compression = Float16Compression()
+
+        # Create distributed optimizer
+        # from torch.distributed.optim import ZeroRedundancyOptimizer
+        # we changed to cls for single gpu training
+        print("Stating standard optimizer")
+        tmp_optimizer = self.optimizer_cls(
+            self.optimizer_parameters,
+            # optimizer_class=optimizer_cls,
+            # parameters_as_bucket_view=True,
+            lr=float(self.conf.everyone.lr),
+            betas=(float(self.conf.everyone.opt_betas_one), float(self.conf.everyone.opt_betas_two)),
+            eps=float(self.conf.everyone.opt_epsilon),
+            weight_decay=float(self.conf.everyone.opt_weight_decay),
+        )
+        print("Finished standard optimizer")
 
         self.lr_scheduler = get_scheduler(
             self.conf.everyone.lr_scheduler,
@@ -441,7 +442,7 @@ class DistributedTrainer:
             num_training_steps=self.total_epochs * self.imgs_per_epoch,
         )
 
-        print("Stating hivemind optimizer")
+        print("Starting hivemind optimizer")
 
         self.optimizer = hivemind.Optimizer(
             dht=self.dht,
@@ -862,6 +863,7 @@ class DistributedTrainer:
         exit()
 
     def _get_ip_online(self) -> str:
+        """Since Hivemind is still implementing NAT hole punching, we get IP from online sources for now"""
         self.log_queue.put("Auto-detecting public IP")
         try:
             ip = requests.get("https://api.ipify.org/", timeout=5).text
@@ -885,6 +887,7 @@ class DistributedTrainer:
         raise ValueError("Could not get IP online.")
 
     def _log_debugging(self) -> None:
+        """Useful logging function"""
         # Inform the user of host, and various versions -- useful for debugging issues.
         print("RUN_NAME:", "Hivemind Project")
         print("HOST:", socket.gethostname())
