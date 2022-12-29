@@ -257,40 +257,18 @@ class DistributedTrainer:
         self.total_epochs = 10
         self.config = omegaconf.OmegaConf.create(self.conf)
         self.rank = 0
+        self.device = torch.device('cuda')
+        self.global_step = 0  # TODO: Do we need to read the global step from the swarm?
 
         torch.cuda.set_device(self.rank)
+        os.makedirs(self.config.intern.workingdir, exist_ok=True)
 
-        if self.rank == 0:
-            os.makedirs(self.config.intern.workingdir, exist_ok=True)
+        mode = 'disabled'
+        if self.config.enable_wandb:
+            mode = 'online'
+        self.run = wandb.init(project="Hivemind Project", name="Hivemind", config=self.config, dir=self.config.intern.workingdir+'/wandb', mode=mode)
 
-            mode = 'disabled'
-            if self.config.enable_wandb:
-                mode = 'online'
-            self.run = wandb.init(project="Hivemind Project", name="Hivemind", config=self.config, dir=self.config.intern.workingdir+'/wandb', mode=mode)
-
-            # Inform the user of host, and various versions -- useful for debugging issues.
-            print("RUN_NAME:", "Hivemind Project")
-            print("HOST:", socket.gethostname())
-            self.log_queue.put("HOST: " + str(socket.gethostname()))
-            print("CUDA:", torch.version.cuda)
-            self.log_queue.put(("CUDA: " + str(torch.version.cuda)))
-            print("TORCH:", torch.__version__)
-            self.log_queue.put(("TORCH: " + str(torch.__version__)))
-            print("TRANSFORMERS:", transformers.__version__)
-            self.log_queue.put(("TRANSFORMERS: " + str(transformers.__version__)))
-            print("DIFFUSERS:", diffusers.__version__)
-            self.log_queue.put(("DIFFUSERS:" + str(diffusers.__version__)))
-            print("MODEL:", self.conf.everyone.model)
-            self.log_queue.put(("MODEL:" + str(self.conf.everyone.model)))
-            print("FP16:", self.conf.everyone.fp16)
-            self.log_queue.put(("FP16:" + str(self.conf.everyone.fp16)))
-            print("RESOLUTION:", self.conf.everyone.resolution)
-            self.log_queue.put(("RESOLUTION:" + str(self.conf.everyone.resolution)))
-
-        self.device = torch.device('cuda')
-
-        print("DEVICE:", self.device)
-        self.log_queue.put(("DEVICE: " + str(self.device)))
+        self._log_debugging()
 
         # setup fp16 stuff
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.conf.everyone.fp16)
@@ -405,46 +383,19 @@ class DistributedTrainer:
                 self.conf.publicip = None
 
             if self.conf.publicip == "auto" or self.conf.publicip is None:
-                self.log_queue.put("Auto-detecting public IP")
-                completed = False
-                if completed is False:
-                    try:
-                        ip = requests.get("https://api.ipify.org/", timeout=5).text
-                        ipsrc = "online"
-                        completed = True
-                    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-                        print("Ipfy.org took too long, trying another domain.")
-                        self.log_queue.put("Ipfy.org took too long, trying another domain.")
-                if completed is False:
-                    try:
-                        ip = requests.get("https://ipv4.icanhazip.com/", timeout=5).text
-                        ipsrc = "online"
-                        completed = True
-                    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-                        print("Icanhazip.com took too long, trying another domain.")
-                        self.log_queue.put("Icanhazip.com took too long, trying another domain.")
-                if completed is False:
-                    try:
-                        tmpjson = json.loads(requests.get("https://jsonip.com/", timeout=5).content)
-                        ip = tmpjson["ip"]
-                        ipsrc = "online"
-                        completed = True
-                    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-                        print("Jsonip.com took too long, ran out of alternatives.")
-                        self.log_queue.put("Jsonip.com took too long, ran out of alternatives.")
-                        raise(ConnectionError)
+                _ip = self._get_ip_online()
+                self.ipsrc = "online"
             else:
                 self.log_queue.put("Loading public IP from configuration")
-                ip = self.conf.publicip
+                _ip = self.conf.publicip
                 self.ipsrc = "config"
 
             #check if valid ip
             try:
-                ip = ipaddress.ip_address(ip)
-                self.ip = str(ip)
+                self.ip = str(ipaddress.ip_address(_ip))
             except Exception:
-                self.log_queue.put("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
-                raise ValueError("Invalid IP, please check the configuration file. IP Source: " + ipsrc)
+                self.log_queue.put("Invalid IP, please check the configuration file. IP Source: " + self.ipsrc)
+                raise ValueError("Invalid IP, please check the configuration file. IP Source: " + self.ipsrc)
 
             public_maddrs_tcp = "/ip4/" + self.ip + "/tcp/" + str(self.conf.external_tcp)
             # public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
@@ -461,7 +412,7 @@ class DistributedTrainer:
         )
 
         #set compression and optimizer
-        compression = Float16Compression()
+        _compression = Float16Compression()
 
         self.lr_scheduler = get_scheduler(
         self.conf.everyone.lr_scheduler,
@@ -483,8 +434,8 @@ class DistributedTrainer:
             averaging_timeout=1200.0,
             allreduce_timeout=1200.0,
             load_state_timeout=1200.0,
-            grad_compression=compression,
-            state_averaging_compression=compression,
+            grad_compression=_compression,
+            state_averaging_compression=_compression,
             verbose=True,
             scheduler=self.lr_scheduler
         )
@@ -667,8 +618,6 @@ class DistributedTrainer:
             for i in range(already_done_steps):
                 self.lr_scheduler.step()
             print("Done")
-            loss = torch.tensor(0.0, device=self.device, dtype=self.weight_dtype)
-            global_step = 0
             while True:
                 print(get_gpu_ram())
                 print("Getting chunks")
@@ -755,7 +704,7 @@ class DistributedTrainer:
                     steps_per_second = 1 / seconds_per_step
                     rank_images_per_second = int(self.conf.batchSize) * steps_per_second
                     #world_images_per_second = rank_images_per_second #* world_size
-                    samples_seen = global_step * int(self.conf.batchSize) #* world_size
+                    samples_seen = self.global_step * int(self.conf.batchSize) #* world_size
 
                     # get global loss for logging
                     # torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
@@ -763,21 +712,21 @@ class DistributedTrainer:
 
                     if self.rank == 0:
                         progress_bar.update(1)
-                        global_step += 1
+                        self.global_step += 1
                         logs = {
                             "train/loss": loss.detach().item(),
                             "train/lr": self.lr_scheduler.get_last_lr()[0],
                             "train/epoch": 1,
-                            "train/step": global_step,
+                            "train/step": self.global_step,
                             "train/samples_seen": samples_seen,
                             "perf/rank_samples_per_second": rank_images_per_second,
                             #"perf/global_samples_per_second": world_images_per_second,
                         }
                         progress_bar.set_postfix(logs)
-                        self.run.log(logs, step=global_step)
-                        if global_step % 10 == 0 and global_step > 0:
+                        self.run.log(logs, step=self.global_step)
+                        if self.global_step % 10 == 0 and self.global_step > 0:
                             first_str_to_log = "steps/s: " + str(steps_per_second) + " imgs/s: " + str(rank_images_per_second) + " imgs seen: " + str(samples_seen)
-                            second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(self.lr_scheduler.get_last_lr()[0]) + " step: " + str(global_step)
+                            second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(self.lr_scheduler.get_last_lr()[0]) + " step: " + str(self.global_step)
                             first_opt_log = str(self.optimizer.tracker.global_progress)
                             self.log_queue.put(first_str_to_log)
                             self.log_queue.put(second_str_to_log)
@@ -797,7 +746,7 @@ class DistributedTrainer:
 
                     if self.conf.enable_inference:
                         #hardcoded
-                        if global_step % 500 == 0 and global_step > 0:
+                        if self.global_step % 500 == 0 and self.global_step > 0:
                             if self.rank == 0:
                                 # get prompt from random batch
                                 prompt = self.tokenizer.decode(batch['tokens'][random.randint(0, len(batch['tokens'])-1)])
@@ -844,12 +793,12 @@ class DistributedTrainer:
                                                 with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
                                                     f.write('Used prompt: ' + prompt + '\n')
                                                     f.write('Generated Image Filename: ' + filenameImg + '\n')
-                                                    f.write('Generated at: ' + str(global_step) + ' steps' + '\n')
+                                                    f.write('Generated at: ' + str(self.global_step) + ' steps' + '\n')
                                                     f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
 
                                 # log images under single caption
                                 if self.conf.enable_wandb:
-                                    self.run.log({'images': images}, step=global_step)
+                                    self.run.log({'images': images}, step=self.global_step)
 
                                 # cleanup so we don't run out of memory
                                 del pipeline
@@ -862,7 +811,7 @@ class DistributedTrainer:
                 self.iethread.stop()
             pass
         except Exception as e:
-            print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
+            print(f'Exception caught on rank {self.rank} at step {self.global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
             pass
 
         self.save_checkpoint()
@@ -876,6 +825,51 @@ class DistributedTrainer:
         print("TRAINING_FINISHED")
         self.log_queue.put("TRAINING FINISHED")
         exit()
+
+    def _get_ip_online(self) -> str:
+        self.log_queue.put("Auto-detecting public IP")
+        try:
+            ip = requests.get("https://api.ipify.org/", timeout=5).text
+            return ip
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+            print("Ipfy.org took too long, trying another domain.")
+            self.log_queue.put("Ipfy.org took too long, trying another domain.")
+        try:
+            ip = requests.get("https://ipv4.icanhazip.com/", timeout=5).text
+            return ip
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+            print("Icanhazip.com took too long, trying another domain.")
+            self.log_queue.put("Icanhazip.com took too long, trying another domain.")
+        try:
+            tmpjson = json.loads(requests.get("https://jsonip.com/", timeout=5).content)
+            ip = tmpjson["ip"]
+            return ip
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
+            print("Jsonip.com took too long, ran out of alternatives.")
+            self.log_queue.put("Jsonip.com took too long, ran out of alternatives.")
+        raise ValueError("Could not get IP online.")
+
+    def _log_debugging(self) -> None:
+        # Inform the user of host, and various versions -- useful for debugging issues.
+        print("RUN_NAME:", "Hivemind Project")
+        print("HOST:", socket.gethostname())
+        self.log_queue.put("HOST: " + str(socket.gethostname()))
+        print("CUDA:", torch.version.cuda)
+        self.log_queue.put(("CUDA: " + str(torch.version.cuda)))
+        print("TORCH:", torch.__version__)
+        self.log_queue.put(("TORCH: " + str(torch.__version__)))
+        print("TRANSFORMERS:", transformers.__version__)
+        self.log_queue.put(("TRANSFORMERS: " + str(transformers.__version__)))
+        print("DIFFUSERS:", diffusers.__version__)
+        self.log_queue.put(("DIFFUSERS:" + str(diffusers.__version__)))
+        print("MODEL:", self.conf.everyone.model)
+        self.log_queue.put(("MODEL:" + str(self.conf.everyone.model)))
+        print("FP16:", self.conf.everyone.fp16)
+        self.log_queue.put(("FP16:" + str(self.conf.everyone.fp16)))
+        print("RESOLUTION:", self.conf.everyone.resolution)
+        self.log_queue.put(("RESOLUTION:" + str(self.conf.everyone.resolution)))
+        print("DEVICE:", self.device)
+        self.log_queue.put(("DEVICE: " + str(self.device)))
 
 def PyTorchTrainer(command_queue, log_queue):
     print(type(command_queue), flush=True)
