@@ -46,24 +46,41 @@
       </div>
     </div>
     <div class="mx-auto flex justify-center">
-      <div class="flex flex-col items-center">
-        <div class="m-4 text-center text-2xl">Public Telemetry</div>
-        <label for="enable_stats" class="flex items-center">
-          <input type="checkbox" id="enable_stats" class="m-2 rounded border p-2" placeholder="Enable Stats"/>
-          <span>Enable Stats</span>
-        </label>
-        <label for="geoaprox" class="flex items-center">
-          <input type="checkbox" id="geoaprox" class="m-2 rounded border p-2" placeholder="geoaprox"/>
-          <span>Geolocation</span>
-        </label>
-        <label for="bandwidth" class="flex items-center">
-          <input type="checkbox" id="bandwidth" class="m-2 rounded border p-2" placeholder="bandwidth"/>
-          <span>Bandwidth</span>
-        </label>
-        <label for="specs" class="flex items-center">
-          <input type="checkbox" id="specs" class="m-2 rounded border p-2" placeholder="specs"/>
-          <span>Specifications</span>
-        </label>
+      <div>
+        <div class="flex flex-col items-center">
+          <div class="m-4 text-center text-2xl">Public Telemetry</div>
+          <label for="enable_stats" class="flex items-center">
+            <input type="checkbox" id="enable_stats" class="m-2 rounded border p-2" placeholder="Enable Stats"/>
+            <span>Enable Stats</span>
+          </label>
+          <label for="geoaprox" class="flex items-center">
+            <input type="checkbox" id="geoaprox" class="m-2 rounded border p-2" placeholder="geoaprox"/>
+            <span>Geolocation</span>
+          </label>
+          <label for="bandwidth" class="flex items-center">
+            <input type="checkbox" id="bandwidth" class="m-2 rounded border p-2" placeholder="bandwidth"/>
+            <span>Bandwidth</span>
+          </label>
+          <label for="specs" class="flex items-center">
+            <input type="checkbox" id="specs" class="m-2 rounded border p-2" placeholder="specs"/>
+            <span>Specifications</span>
+          </label>
+        </div>
+        <div class="mx-auto mb-5 flex justify-center">
+          <div class="flex flex-col items-center">
+            <div class="m-4 text-center text-2xl">Private Telemetry</div>
+            <label for="enable_wandb" class="flex items-center">
+              <input type="checkbox" id="enable_wandb" class="m-2 rounded border p-2" placeholder="Enable WandB" />
+              <span>Enable WandB</span>
+            </label>
+            <label for="wandb_token" class="sr-only">WandB Token</label>
+            <input type="text" id="wandb_token" class="m-2 rounded border p-2" placeholder="WandB Token" />
+            <label for="enable_inference" class="flex items-center">
+              <input type="checkbox" id="enable_inference" class="m-2 rounded border p-2" placeholder="Enable Inference" />
+              <span>Enable Inference </span>
+            </label>
+          </div>
+        </div>
       </div>
   
       <div class="flex flex-col items-center">
@@ -79,40 +96,39 @@
             <input type="text" id="public_ip" class="m-2 w-40 rounded border p-2" placeholder="Public IP" />
           </div>
   
+          
+        </div>
+        <div class="mx-auto flex justify-center">
           <div class="flex flex-col items-center">
-            <label for="internal_ports">Internal Ports</label>
+            <label for="internal_ports">TCP Ports</label>
             <div class="mx-auto flex justify-center">
               <!-- <label for="internal_udp" class="sr-only">Internal UCP Port</label>
               <input type="text" id="internal_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" /> -->
               <label for="internal_tcp" class="sr-only">Internal TCP Port</label>
-              <input type="text" id="internal_tcp" class="m-2 w-14 rounded border p-1" placeholder="TCP" />
+              <input type="text" id="internal_tcp" class="m-2 w-20 rounded border p-1" placeholder="Internal" />
             </div>
-            <label for="external_ports">External Ports</label>
             <div class="mx-auto flex justify-center">
               <!-- <label for="external_udp" class="sr-only">External UCP Port</label>
               <input type="text" id="external_udp" class="m-2 w-14 rounded border p-1" placeholder="UDP" /> -->
               <label for="external_tcp" class="sr-only">External TCP Port</label>
-              <input type="text" id="external_tcp" class="m-2 w-14 rounded border p-1" placeholder="TCP" />
+              <input type="text" id="external_tcp" class="m-2 w-20 rounded border p-1" placeholder="External" />
+            </div>
+          </div>
+          <div class="flex flex-col items-center">
+            <label for="internal_ports">I.E. Ports</label>
+            <div class="mx-auto flex justify-center">
+              <label for="internal_ie" class="sr-only">Internal IE Port</label>
+              <input type="text" id="internal_ie" class="m-2 w-20 rounded border p-1" placeholder="Internal" />
+            </div>
+            <div class="mx-auto flex justify-center">
+              <label for="external_ie" class="sr-only">External IE Port</label>
+              <input type="text" id="external_ie" class="m-2 w-20 rounded border p-1" placeholder="External" />
             </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="mx-auto mb-5 flex justify-center">
-      <div class="flex flex-col items-center">
-        <div class="m-4 text-center text-2xl">Private Telemetry</div>
-        <label for="enable_wandb" class="flex items-center">
-          <input type="checkbox" id="enable_wandb" class="m-2 rounded border p-2" placeholder="Enable WandB" />
-          <span>Enable WandB</span>
-        </label>
-        <label for="wandb_token" class="sr-only">WandB Token</label>
-        <input type="text" id="wandb_token" class="m-2 rounded border p-2" placeholder="WandB Token" />
-        <label for="enable_inference" class="flex items-center">
-          <input type="checkbox" id="enable_inference" class="m-2 rounded border p-2" placeholder="Enable Inference" />
-          <span>Enable Inference </span>
-        </label>
-      </div>
-    </div>
+    
     <div class="flex justify-center">
         <button onclick="submit_conf();" type="submit" class="focus:shadow-outline m-2 rounded bg-green-500 py-2 px-4 font-bold text-white hover:bg-green-700 focus:outline-none">Save</button>
         <!-- <button type="submit" class="focus:shadow-outline m-2 rounded bg-red-500 py-2 px-4 font-bold text-white hover:bg-red-700 focus:outline-none">Reset</button> -->
@@ -138,6 +154,8 @@
             const internal_tcp = document.getElementById('internal_tcp').value;
             // const external_udp = document.getElementById('external_udp').value;
             const external_tcp = document.getElementById('external_tcp').value;
+            const internal_ie = document.getElementById('internal_ie').value;
+            const external_ie = document.getElementById('external_ie').value;
             const enable_wandb = document.getElementById('enable_wandb').checked;
             const wandb_token = document.getElementById('wandb_token').value;
             const enable_inference = document.getElementById('enable_inference').checked;
@@ -162,6 +180,8 @@
                 internal_tcp: internal_tcp,
                 // external_udp: external_udp,
                 external_tcp: external_tcp,
+                internal_ie: internal_ie,
+                external_ie: external_ie,
                 enable_wandb: enable_wandb,
                 wandb_token: wandb_token,
                 enable_inference: enable_inference,
@@ -251,6 +271,12 @@
             if (data.external_tcp) {
             document.getElementById('external_tcp').value = data.external_tcp;
             }
+            if (data.internal_ie) {
+            document.getElementById('internal_ie').value = data.internal_ie;
+            }
+            if (data.external_ie) {
+            document.getElementById('external_ie').value = data.external_ie;
+            }
             if (data.enable_wandb) {
             document.getElementById('enable_wandb').checked = data.enable_wandb;
             }
@@ -272,6 +298,8 @@
             var internalTcpInput = document.getElementById('internal_tcp');
             // var externalUdpInput = document.getElementById('external_udp');
             var externalTcpInput = document.getElementById('external_tcp');
+            var internalIEInput = document.getElementById('internal_ie');
+            var externalIEInput = document.getElementById('external_ie');
             var publicIpInput = document.getElementById('public_ip');
             
             if (trainerMode === 'Client') {
@@ -279,12 +307,16 @@
             internalTcpInput.disabled = true;
             // externalUdpInput.disabled = true;
             externalTcpInput.disabled = true;
+            internalIEInput.disabled = true;
+            externalIEInput.disabled = true;
             publicIpInput.disabled = true;
             } else {
             // internalUdpInput.disabled = false;
             internalTcpInput.disabled = false;
             // externalUdpInput.disabled = false;
             externalTcpInput.disabled = false;
+            internalIEInput.disabled = false;
+            externalIEInput.disabled = false;
             publicIpInput.disabled = false;
             }
         }

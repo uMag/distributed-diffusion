@@ -71,6 +71,8 @@ import time
 import sqlite3
 import random
 
+MOTHER = False
+
 # Connect to the database
 conn = sqlite3.connect('danbooru.db')
 cursor = conn.cursor()
@@ -168,7 +170,7 @@ def getchunk(amount, conf, log_queue):
     
     threads = []
     for post_id, image_ext, rating in random_posts:
-        t = threading.Thread(target=download_image, args=(post_id, image_ext, conf, log_queue))
+        t = threading.Thread(target=download_image, args=(post_id, image_ext, conf,))
         threads.append(t)
         t.start()
     
@@ -177,7 +179,7 @@ def getchunk(amount, conf, log_queue):
     
     log_queue.put("Chunks ready")
 
-def download_image(post_id, image_ext, conf, log_queue):
+def download_image(post_id, image_ext, conf):
     # Download the image
     image_url = f"https://crowdcloud.us-southeast-1.linodeobjects.com/crowdcloud/opendataset/v1/danbooru/{post_id}.{image_ext}"
     image_response = requests.get(image_url)
@@ -220,6 +222,52 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
     )
 
     return train_dataloader
+
+#This will be initialized on a separate thread and killed when everything finishes
+def informationExchangeServer(conf, maddrs):
+    internal_port = int(conf.internal_ie)
+
+    from threading import Thread
+    from flask import Flask, jsonify
+
+    app = Flask(__name__)
+
+    @app.route('/peer')
+    def peer():
+        return(jsonify(maddrs))
+
+    
+    @app.route('/globalconf')
+    def globalconf():
+        dict_with_configuration = {
+            "model": conf.everyone.model,
+            "extended_chunks": conf.everyone.extended_chunks,
+            "clip_penultimate": conf.everyone.clip_penultimate,
+            "fp16": conf.everyone.fp16,
+            "resolution": conf.everyone.resolution,
+            "seed": conf.everyone.seed,
+            "train_text_encoder": conf.everyone.train_text_encoder,
+            "lr": conf.everyone.lr,
+            "ucg": conf.everyone.ucg,
+            "use_ema": conf.everyone.use_ema,
+            "lr_scheduler": conf.everyone.lr_scheduler,
+            # Advanced, do not touch
+            "opt_betas_one": conf.everyone.opt_betas_one,
+            "opt_betas_two": conf.everyone.opt_betas_two,
+            "opt_epsilon": conf.everyone.opt_epsilon,
+            "opt_weight_decay": conf.everyone.opt_weight_decay,
+            "buckets_shuffle": conf.everyone.buckets_shuffle,
+            "buckets_side_min": conf.everyone.buckets_side_min,
+            "buckets_side_max": conf.everyone.buckets_side_max,
+            "lr_scheduler_warmup": conf.everyone.lr_scheduler_warmup # Recheck this in the future if we get grad offloading with HM
+        }
+        return(jsonify(dict_with_configuration))
+
+    def run():
+        app.run(host="0.0.0.0", port=internal_port)
+
+    thread = Thread(target=run,)
+    return thread
 
 
 def InitializeTraining(command_queue, log_queue, conf):
@@ -345,16 +393,18 @@ def InitializeTraining(command_queue, log_queue, conf):
 
     # Hivemind Setup
     # get network peers (if mother peer then ignore)
-    rmaddrs_rq = requests.get('http://' + conf.server + "/v1/get/peers")
-    if rmaddrs_rq.status_code == 200:
-        peer_list = json.loads(rmaddrs_rq.content)
+    if MOTHER is False:
+        rmaddrs_rq = requests.get('http://' + conf.server + "/peer")
+        if rmaddrs_rq.status_code == 200:
+            peer_list = json.loads(rmaddrs_rq.content)
+        else:
+            log_queue.put("Unable to obtain peers from server")
+            raise ConnectionError("Unable to obtain peers from server")
     else:
-        log_queue.put("Unable to obtain peers from server")
-        raise ConnectionError("Unable to obtain peers from server")
+        peer_list = None
 
     log_queue.put("Trainer set to " + conf.trainermode + " mode")
     if conf.trainermode == "Client":
-        
         client_mode = True
         host_maddrs_full = None
         public_maddrs_full = None
@@ -467,124 +517,124 @@ def InitializeTraining(command_queue, log_queue, conf):
     log_queue.put("Global IP:", hivemind.utils.networking.choose_ip_address(dht.get_visible_maddrs()))
 
     #statistics
-    if conf.enablestats:
-        statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
-        bandwidthstats = {}
-        specs_stats = {}
-        print("Stats enabled")
-        log_queue.put("Public Telemetry enabled.")
+    # if conf.enablestats:
+    #     statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
+    #     bandwidthstats = {}
+    #     specs_stats = {}
+    #     print("Stats enabled")
+    #     log_queue.put("Public Telemetry enabled.")
 
-        if conf.geoaprox:
-            log_queue.put("Geolocation Aproximation enabled (server-side)")
-            statconfig['geoaprox'] = True
+    #     if conf.geoaprox:
+    #         log_queue.put("Geolocation Aproximation enabled (server-side)")
+    #         statconfig['geoaprox'] = True
 
-        if conf.bandwidth:
-            log_queue.put("Bandwidth enabled (client-side)")
-            statconfig["bandwidth"] = True
-            import speedtest
-            session = speedtest.Speedtest()
-            download = session.download()
-            upload = session.upload()
-            ping = session.results.ping
-            bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
+    #     if conf.bandwidth:
+    #         log_queue.put("Bandwidth enabled (client-side)")
+    #         statconfig["bandwidth"] = True
+    #         import speedtest
+    #         session = speedtest.Speedtest()
+    #         download = session.download()
+    #         upload = session.upload()
+    #         ping = session.results.ping
+    #         bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
 
-        if conf.specs:
-            log_queue.put("Specs enabled (client-side)")
-            statconfig["specs"] = True
-            # GPU
-            # https://docs.nvidia.com/deploy/nvml-api/index.html
-            pynvml.nvmlInit()
-            cudadriver_version = pynvml.nvmlSystemGetCudaDriverVersion()
-            driver_version = pynvml.nvmlSystemGetDriverVersion()
-            NVML_version = pynvml.nvmlSystemGetNVMLVersion()
+    #     if conf.specs:
+    #         log_queue.put("Specs enabled (client-side)")
+    #         statconfig["specs"] = True
+    #         # GPU
+    #         # https://docs.nvidia.com/deploy/nvml-api/index.html
+    #         pynvml.nvmlInit()
+    #         cudadriver_version = pynvml.nvmlSystemGetCudaDriverVersion()
+    #         driver_version = pynvml.nvmlSystemGetDriverVersion()
+    #         NVML_version = pynvml.nvmlSystemGetNVMLVersion()
 
-            #TODO: Assuming one gpu only
-            cudadev = torch.cuda.current_device()
-            nvml_device = pynvml.nvmlDeviceGetHandleByIndex(cudadev)
+    #         #TODO: Assuming one gpu only
+    #         cudadev = torch.cuda.current_device()
+    #         nvml_device = pynvml.nvmlDeviceGetHandleByIndex(cudadev)
 
-            #psu_info = pynvml.nvmlUnitGetPsuInfo(pynvml.c_nvmlPSUInfo_t.)
-            #temperature_info = pynvml.nvmlUnitGetTemperature(nvml_device)
-            #unit_info = pynvml.nvmlUnitGetUnitInfo(nvml_device)
+    #         #psu_info = pynvml.nvmlUnitGetPsuInfo(pynvml.c_nvmlPSUInfo_t.)
+    #         #temperature_info = pynvml.nvmlUnitGetTemperature(nvml_device)
+    #         #unit_info = pynvml.nvmlUnitGetUnitInfo(nvml_device)
 
-            arch_info = pynvml.nvmlDeviceGetArchitecture(nvml_device)
-            brand_info = pynvml.nvmlDeviceGetBrand(nvml_device)
-            #clock_info = pynvml.nvmlDeviceGetClock(nvml_device)
-            #clockinfo_info = pynvml.nvmlDeviceGetClockInfo(nvml_device)
-            #maxclock_info = pynvml.nvmlDeviceGetMaxClockInfo(nvml_device)
-            computemode_info = pynvml.nvmlDeviceGetComputeMode(nvml_device)
-            compute_compatability = pynvml.nvmlDeviceGetCudaComputeCapability(nvml_device)
+    #         arch_info = pynvml.nvmlDeviceGetArchitecture(nvml_device)
+    #         brand_info = pynvml.nvmlDeviceGetBrand(nvml_device)
+    #         #clock_info = pynvml.nvmlDeviceGetClock(nvml_device)
+    #         #clockinfo_info = pynvml.nvmlDeviceGetClockInfo(nvml_device)
+    #         #maxclock_info = pynvml.nvmlDeviceGetMaxClockInfo(nvml_device)
+    #         computemode_info = pynvml.nvmlDeviceGetComputeMode(nvml_device)
+    #         compute_compatability = pynvml.nvmlDeviceGetCudaComputeCapability(nvml_device)
 
-            pcie_link_gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(nvml_device)
-            pcie_width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(nvml_device)
+    #         pcie_link_gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(nvml_device)
+    #         pcie_width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(nvml_device)
 
-            display_active_bool = pynvml.nvmlDeviceGetDisplayActive(nvml_device)
+    #         display_active_bool = pynvml.nvmlDeviceGetDisplayActive(nvml_device)
 
-            #memory_info = pynvml.nvmlDeviceGetMemoryInfo(nvml_device)
+    #         #memory_info = pynvml.nvmlDeviceGetMemoryInfo(nvml_device)
 
-            gpu_energy_cons = pynvml.nvmlDeviceGetTotalEnergyConsumption(nvml_device)
-            device_name = pynvml.nvmlDeviceGetName(nvml_device)
+    #         gpu_energy_cons = pynvml.nvmlDeviceGetTotalEnergyConsumption(nvml_device)
+    #         device_name = pynvml.nvmlDeviceGetName(nvml_device)
 
-            gpusinfo = {
-                "software": {
-                    "CUDA_DRIVER_VERSION": str(cudadriver_version),
-                    "NVIDIA_DRIVER_VERSION": str(driver_version),
-                    "NVML_VERSION": str(NVML_version),
-                },
-                "hardware": {
-                    "energy": {
-                        #"PSU_INFO": psu_info,
-                        #"TEMPERATURE_INFO": temperature_info,
-                        "ENERGY_CONSUMPTION": str(gpu_energy_cons)
-                    },
-                    "info": {
-                        #"UNIT_INFO": unit_info,
-                        "BRAND_INFO": str(brand_info),
-                        "DEV_NAME": str(device_name),
-                        "DISPLAY_ACTIVE": str(display_active_bool),
-                        "ARCH_INFO": str(arch_info)
-                    },
-                    "memory": {
-                        "PCIE_LINK_GEN": str(pcie_link_gen),
-                        "PCIE_WIDTH": str(pcie_width),
-                        #"MEMORY_INFO": memory_info,
-                    },
-                    "compute": {
-                        #"CLOCK": clock_info,
-                        #"CLOCK_INFO": clockinfo_info,
-                        #"MAX_CLOCK": maxclock_info,
-                        "COMPUTE_MODE": str(computemode_info),
-                        "COMPUTE_COMPATABILITY": str(compute_compatability)
-                    }
-                }
-            }
+    #         gpusinfo = {
+    #             "software": {
+    #                 "CUDA_DRIVER_VERSION": str(cudadriver_version),
+    #                 "NVIDIA_DRIVER_VERSION": str(driver_version),
+    #                 "NVML_VERSION": str(NVML_version),
+    #             },
+    #             "hardware": {
+    #                 "energy": {
+    #                     #"PSU_INFO": psu_info,
+    #                     #"TEMPERATURE_INFO": temperature_info,
+    #                     "ENERGY_CONSUMPTION": str(gpu_energy_cons)
+    #                 },
+    #                 "info": {
+    #                     #"UNIT_INFO": unit_info,
+    #                     "BRAND_INFO": str(brand_info),
+    #                     "DEV_NAME": str(device_name),
+    #                     "DISPLAY_ACTIVE": str(display_active_bool),
+    #                     "ARCH_INFO": str(arch_info)
+    #                 },
+    #                 "memory": {
+    #                     "PCIE_LINK_GEN": str(pcie_link_gen),
+    #                     "PCIE_WIDTH": str(pcie_width),
+    #                     #"MEMORY_INFO": memory_info,
+    #                 },
+    #                 "compute": {
+    #                     #"CLOCK": clock_info,
+    #                     #"CLOCK_INFO": clockinfo_info,
+    #                     #"MAX_CLOCK": maxclock_info,
+    #                     "COMPUTE_MODE": str(computemode_info),
+    #                     "COMPUTE_COMPATABILITY": str(compute_compatability)
+    #                 }
+    #             }
+    #         }
 
-            cpuinfo = {}
-            import cpuinfo
-            cpudict = cpuinfo.get_cpu_info()
-            cpuinfo = {
-                'CPU_ARCH': str(cpudict['arch']),
-                "CPU_HZ_AD": str(cpudict["hz_advertised_friendly"]),
-                "CPU_HZ_AC": str(cpudict["hz_actual_friendly"]),
-                "CPU_BITS": str(cpudict["bits"]),
-                "VENDOR_ID": str(cpudict["vendor_id_raw"]),
-                #"HARDWARE_RAW": cpudict["hardware_raw"],
-                "BRAND_RAW": str(cpudict["brand_raw"])
-            }
+    #         cpuinfo = {}
+    #         import cpuinfo
+    #         cpudict = cpuinfo.get_cpu_info()
+    #         cpuinfo = {
+    #             'CPU_ARCH': str(cpudict['arch']),
+    #             "CPU_HZ_AD": str(cpudict["hz_advertised_friendly"]),
+    #             "CPU_HZ_AC": str(cpudict["hz_actual_friendly"]),
+    #             "CPU_BITS": str(cpudict["bits"]),
+    #             "VENDOR_ID": str(cpudict["vendor_id_raw"]),
+    #             #"HARDWARE_RAW": cpudict["hardware_raw"],
+    #             "BRAND_RAW": str(cpudict["brand_raw"])
+    #         }
 
-            specs_stats = {'gpu': gpusinfo, 'cpu': cpuinfo}
-        statsjson = {
-            'python_ver': str(sys.version),
-            'config': statconfig,
-            'bandwidth': bandwidthstats,
-            'specs': specs_stats
-        }
-        print(statsjson)
-        pstats = requests.post('http://' + conf.server + '/v1/post/stats', json=json.dumps(statsjson))
-        if pstats.status_code != 200:
-            log_queue.put("Failed to report telemetry")
-            raise ConnectionError("Failed to report stats")
-        else:
-            log_queue.put("Telemetry reported successfully")
+    #         specs_stats = {'gpu': gpusinfo, 'cpu': cpuinfo}
+    #     statsjson = {
+    #         'python_ver': str(sys.version),
+    #         'config': statconfig,
+    #         'bandwidth': bandwidthstats,
+    #         'specs': specs_stats
+    #     }
+    #     print(statsjson)
+    #     pstats = requests.post('http://' + conf.server + '/v1/post/stats', json=json.dumps(statsjson))
+    #     if pstats.status_code != 200:
+    #         log_queue.put("Failed to report telemetry")
+    #         raise ConnectionError("Failed to report stats")
+    #     else:
+    #         log_queue.put("Telemetry reported successfully")
    
     # create ema
     if conf.everyone.use_ema:
@@ -616,6 +666,11 @@ def InitializeTraining(command_queue, log_queue, conf):
 
             if conf.everyone.use_ema:
                 ema_unet.restore(unet.parameters())
+
+    if conf.trainermode == "Relay":
+        #open IE server
+        iethread = informationExchangeServer(conf, dht.get_visible_maddrs())
+        iethread.start()
     
     # train!
     try:
@@ -810,12 +865,16 @@ def InitializeTraining(command_queue, log_queue, conf):
         print("Stopping Training upon user request")
         print("TRAINING_STOPPED")
         log_queue.put("TRAINING STOPPED")
+        if conf.trainermode == "Relay":
+            iethread.stop()
         pass
     except Exception as e:
         print(f'Exception caught on rank {rank} at step {global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
         pass
 
     save_checkpoint()
+    if conf.trainermode == "Relay":
+        iethread.stop()
 
     #cleanup()
 

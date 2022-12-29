@@ -266,7 +266,7 @@ def getconf():
         "opt_weight_decay": "1e-2",
         "buckets_shuffle": True,
         "buckets_side_min": "256",
-        "buckets_side_max": "768",
+        "buckets_side_max": "512",
         "lr_scheduler_warmup": "0.05" # Recheck this in the future if we get grad offloading with HM
     }
     return(jsonify(dict_with_configuration))
