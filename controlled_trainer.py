@@ -38,7 +38,8 @@ try:
 except pynvml.nvml.NVMLError_LibraryNotFound:
     pynvml = None
 
-from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, PNDMScheduler, DDIMScheduler, StableDiffusionPipeline
+from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, PNDMScheduler, DDIMScheduler, \
+    StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.optimization import get_scheduler
 from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
@@ -46,7 +47,6 @@ from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 from hivemind import Float16Compression
 
 from utils.data import ImageStore, SimpleBucket, AspectDataset, EMAModel
-
 
 MOTHER = False
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -59,28 +59,34 @@ cursor = conn.cursor()
 cursor.execute('SELECT * FROM posts')
 posts = cursor.fetchall()
 
+
 def select_random_post():
-  # Select a random record from the posts table
-  random_post = random.choice(posts)
-  post_id = random_post[0]
-  image_ext = random_post[1]
-  rating = random_post[2]
-  
-  # Return the post_id, image_ext, and rating
-  return post_id, image_ext, rating
+    # Select a random record from the posts table
+    random_post = random.choice(posts)
+    post_id = random_post[0]
+    image_ext = random_post[1]
+    rating = random_post[2]
+
+    # Return the post_id, image_ext, and rating
+    return post_id, image_ext, rating
+
 
 # Get the total number of rows in the posts table
 cursor.execute('SELECT COUNT(*) FROM posts')
 num_rows = cursor.fetchone()[0]
 
+
 def get_num_rows():
     return num_rows
+
 
 # Close the connection to the database
 conn.close()
 
+
 class StopTrainingException(Exception):
     pass
+
 
 def get_gpu_ram() -> str:
     """
@@ -103,7 +109,7 @@ def get_gpu_ram() -> str:
         torch_reserved_max = int(torch.cuda.memory.max_memory_reserved() / 1E6)
         torch_used_gpu = int(torch.cuda.memory_allocated() / 1E6)
         torch_max_used_gpu = int(torch.cuda.max_memory_allocated() / 1E6)
-        torch_str = f"TORCH: (R: {torch_reserved_gpu:,}mb/"  \
+        torch_str = f"TORCH: (R: {torch_reserved_gpu:,}mb/" \
                     f"{torch_reserved_max:,}mb, " \
                     f"A: {torch_used_gpu:,}mb/{torch_max_used_gpu:,}mb)"
     except AssertionError:
@@ -116,6 +122,7 @@ def get_gpu_ram() -> str:
     return f"CPU: (maxrss: {cpu_maxrss:,}mb F: {cpu_free:,}mb) " \
            f"{gpu_str}" \
            f"{torch_str}"
+
 
 def setuphivemind(conf, log_queue):
     log_queue.put("Setting up hivemind")
@@ -135,25 +142,27 @@ def setuphivemind(conf, log_queue):
     #     log_queue.put("Unable to connect to the dataset server")
     #     raise ConnectionError("Unable to connect to server")
 
+
 def getchunk(amount, conf, log_queue):
     log_queue.put("Requesting Chunks")
     if os.path.isdir(conf.intern.tmpdataset):
         shutil.rmtree(conf.intern.tmpdataset)
     os.mkdir(conf.intern.tmpdataset)
-    
+
     # Select 500 random records from the posts table
     random_posts = [select_random_post() for _ in range(int(amount))]
-    
+
     threads = []
     for post_id, image_ext, rating in random_posts:
         t = threading.Thread(target=download_image, args=(post_id, image_ext, conf,))
         threads.append(t)
         t.start()
-    
+
     for t in threads:
         t.join()
-    
+
     log_queue.put("Chunks ready")
+
 
 def download_image(post_id, image_ext, conf):
     # Download the image
@@ -167,6 +176,7 @@ def download_image(post_id, image_ext, conf):
     tags = tags_response['tags']
     open(f"{conf.intern.tmpdataset}/{post_id}.txt", 'w').write(', '.join(tags))
 
+
 def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queue):
     # load dataset
     log_queue.put("Setting up ImageStore")
@@ -175,16 +185,16 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
     dataset = AspectDataset(store, tokenizer, text_encoder, device, conf, ucg=float(conf.everyone.ucg))
     log_queue.put("Setting up SimpleBucket")
     sampler = SimpleBucket(
-            store = store,
-            batch_size = int(conf.batchSize),
-            shuffle = conf.everyone.buckets_shuffle,
-            resize = conf.image_store_resize,
-            image_side_min = int(conf.everyone.buckets_side_min),
-            image_side_max = int(conf.everyone.buckets_side_max),
-            image_side_divisor = 64,
-            max_image_area = int(conf.everyone.resolution) ** 2,
-            num_replicas = world_size,
-            rank = rank
+        store=store,
+        batch_size=int(conf.batchSize),
+        shuffle=conf.everyone.buckets_shuffle,
+        resize=conf.image_store_resize,
+        image_side_min=int(conf.everyone.buckets_side_min),
+        image_side_max=int(conf.everyone.buckets_side_max),
+        image_side_divisor=64,
+        max_image_area=int(conf.everyone.resolution) ** 2,
+        num_replicas=world_size,
+        rank=rank
     )
     out_length = "Store Length: " + str(len(store))
     log_queue.put(str(out_length))
@@ -199,7 +209,8 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
 
     return train_dataloader
 
-#This will be initialized on a separate thread and killed when everything finishes
+
+# This will be initialized on a separate thread and killed when everything finishes
 def informationExchangeServer(conf, maddrs):
     internal_port = int(conf.internal_ie)
 
@@ -210,9 +221,8 @@ def informationExchangeServer(conf, maddrs):
 
     @app.route('/peer')
     def peer():
-        return(jsonify(maddrs))
+        return jsonify(maddrs)
 
-    
     @app.route('/globalconf')
     def globalconf():
         dict_with_configuration = {
@@ -235,14 +245,15 @@ def informationExchangeServer(conf, maddrs):
             "buckets_shuffle": conf.everyone.buckets_shuffle,
             "buckets_side_min": conf.everyone.buckets_side_min,
             "buckets_side_max": conf.everyone.buckets_side_max,
-            "lr_scheduler_warmup": conf.everyone.lr_scheduler_warmup # Recheck this in the future if we get grad offloading with HM
+            "lr_scheduler_warmup": conf.everyone.lr_scheduler_warmup
+            # Recheck this in the future if we get grad offloading with HM
         }
-        return(jsonify(dict_with_configuration))
+        return jsonify(dict_with_configuration)
 
     def run():
         app.run(host="0.0.0.0", port=internal_port)
 
-    thread = Thread(target=run,)
+    thread = Thread(target=run, )
     return thread
 
 
@@ -266,7 +277,8 @@ class DistributedTrainer:
         mode = 'disabled'
         if self.config.enable_wandb:
             mode = 'online'
-        self.run = wandb.init(project="Hivemind Project", name="Hivemind", config=self.config, dir=self.config.intern.workingdir+'/wandb', mode=mode)
+        self.run = wandb.init(project="Hivemind Project", name="Hivemind", config=self.config,
+                              dir=self.config.intern.workingdir + '/wandb', mode=mode)
 
         self._log_debugging()
 
@@ -280,10 +292,14 @@ class DistributedTrainer:
         print('RANDOM SEED:', self.conf.everyone.seed)
 
         # I think the hf token is set to an empty string, and not None, so we should be ok. thx js
-        self.tokenizer = CLIPTokenizer.from_pretrained(self.conf.everyone.model, subfolder='tokenizer', use_auth_token=self.conf.hftoken)
-        self.text_encoder = CLIPTextModel.from_pretrained(self.conf.everyone.model, subfolder='text_encoder', use_auth_token=self.conf.hftoken)
-        self.vae = AutoencoderKL.from_pretrained(self.conf.everyone.model, subfolder='vae', use_auth_token=self.conf.hftoken)
-        self.unet = UNet2DConditionModel.from_pretrained(self.conf.everyone.model, subfolder='unet', use_auth_token=self.conf.hftoken)
+        self.tokenizer = CLIPTokenizer.from_pretrained(self.conf.everyone.model, subfolder='tokenizer',
+                                                       use_auth_token=self.conf.hftoken)
+        self.text_encoder = CLIPTextModel.from_pretrained(self.conf.everyone.model, subfolder='text_encoder',
+                                                          use_auth_token=self.conf.hftoken)
+        self.vae = AutoencoderKL.from_pretrained(self.conf.everyone.model, subfolder='vae',
+                                                 use_auth_token=self.conf.hftoken)
+        self.unet = UNet2DConditionModel.from_pretrained(self.conf.everyone.model, subfolder='unet',
+                                                         use_auth_token=self.conf.hftoken)
 
         # Freeze vae and text_encoder
         self.vae.requires_grad_(False)
@@ -304,14 +320,14 @@ class DistributedTrainer:
         # move models to device
         self.vae = self.vae.to(self.device, dtype=self.weight_dtype)
         self.unet = self.unet.to(self.device, dtype=torch.float32)
-        self.text_encoder = self.text_encoder.to(self.device, dtype=self.weight_dtype if not self.conf.everyone.train_text_encoder else torch.float32)
+        self.text_encoder = self.text_encoder.to(self.device,
+                                                 dtype=self.weight_dtype if not self.conf.everyone.train_text_encoder else torch.float32)
 
-
-        if self.conf.eightbitadam: # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
+        if self.conf.eightbitadam:  # Bits and bytes is only supported on certain CUDA setups, so default to regular adam if it fails.
             try:
                 import bitsandbytes as bnb
                 self.optimizer_cls = bnb.optim.AdamW8bit
-            except:
+            except Exception:
                 print('bitsandbytes not supported, using regular Adam optimizer')
                 self.log_queue.put('bitsandbytes not supported, using regular Adam optimizer')
                 self.optimizer_cls = torch.optim.AdamW
@@ -328,11 +344,12 @@ class DistributedTrainer:
         )
         """
 
-        self.optimizer_parameters = self.unet.parameters() if not self.conf.everyone.train_text_encoder else itertools.chain(self.unet.parameters(), self.text_encoder.parameters())
+        self.optimizer_parameters = self.unet.parameters() if not self.conf.everyone.train_text_encoder else itertools.chain(
+            self.unet.parameters(), self.text_encoder.parameters())
 
         # Create distributed optimizer
-        #from torch.distributed.optim import ZeroRedundancyOptimizer
-        #we changed to cls for single gpu training
+        # from torch.distributed.optim import ZeroRedundancyOptimizer
+        # we changed to cls for single gpu training
         print("Stating standard optimizer")
         tmp_optimizer = self.optimizer_cls(
             self.optimizer_parameters,
@@ -390,7 +407,7 @@ class DistributedTrainer:
                 _ip = self.conf.publicip
                 self.ipsrc = "config"
 
-            #check if valid ip
+            # check if valid ip
             try:
                 self.ip = str(ipaddress.ip_address(_ip))
             except Exception:
@@ -401,8 +418,10 @@ class DistributedTrainer:
             # public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
             # public_maddrs_full = [public_maddrs_tcp, public_maddrs_udp]
             public_maddrs_full = [public_maddrs_tcp]
+        else:
+            raise ValueError(f"Trainer mode {self.conf.trainermode} currently not supported")
 
-        #init dht
+        # init dht
         self.dht = hivemind.DHT(
             host_maddrs=self.host_maddrs_full,
             initial_peers=self.peer_list,
@@ -411,14 +430,15 @@ class DistributedTrainer:
             client_mode=self.client_mode,
         )
 
-        #set compression and optimizer
+        # set compression and optimizer
         _compression = Float16Compression()
 
         self.lr_scheduler = get_scheduler(
-        self.conf.everyone.lr_scheduler,
-        optimizer=tmp_optimizer,
-        num_warmup_steps=int(float(self.conf.everyone.lr_scheduler_warmup) * self.imgs_per_epoch * self.total_epochs),
-        num_training_steps=self.total_epochs * self.imgs_per_epoch,
+            self.conf.everyone.lr_scheduler,
+            optimizer=tmp_optimizer,
+            num_warmup_steps=int(
+                float(self.conf.everyone.lr_scheduler_warmup) * self.imgs_per_epoch * self.total_epochs),
+            num_training_steps=self.total_epochs * self.imgs_per_epoch,
         )
 
         print("Stating hivemind optimizer")
@@ -445,11 +465,12 @@ class DistributedTrainer:
         print('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
         print("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
         self.log_queue.put("Hivemind Optimizer and DHT started successfully!")
-        self.log_queue.put("You can share the following initial_perrs to other nodes so they connect directly through this node:")
+        self.log_queue.put(
+            "You can share the following initial_perrs to other nodes so they connect directly through this node:")
         self.log_queue.put('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
         self.log_queue.put("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
 
-        #statistics
+        # # statistics
         # if conf.enablestats:
         #     statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
         #     bandwidthstats = {}
@@ -591,11 +612,13 @@ class DistributedTrainer:
                 self.ema_unet.store(self.unet.parameters())
                 self.ema_unet.copy_to(self.unet.parameters())
             pipeline = StableDiffusionPipeline(
-                text_encoder=self.text_encoder, #if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                text_encoder=self.text_encoder,
+                # if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
                 vae=self.vae,
                 unet=self.unet,
                 tokenizer=self.tokenizer,
-                scheduler=PNDMScheduler.from_pretrained(self.conf.everyone.model, subfolder="scheduler", use_auth_token=self.conf.hftoken),
+                scheduler=PNDMScheduler.from_pretrained(self.conf.everyone.model, subfolder="scheduler",
+                                                        use_auth_token=self.conf.hftoken),
                 safety_checker=StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker"),
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
@@ -621,10 +644,10 @@ class DistributedTrainer:
             while True:
                 print(get_gpu_ram())
                 print("Getting chunks")
-                #only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
+                # only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
                 getchunk(self.conf.imageCount, self.conf, self.log_queue)
 
-                #Note: we removed worldsize here
+                # Note: we removed worldsize here
                 train_dataloader = dataloader(self.tokenizer,
                                               self.text_encoder,
                                               self.device,
@@ -654,14 +677,16 @@ class DistributedTrainer:
                             self.save_checkpoint()
 
                     b_start = time.perf_counter()
-                    latents = self.vae.encode(batch['pixel_values'].to(self.device, dtype=self.weight_dtype)).latent_dist.sample()
+                    latents = self.vae.encode(
+                        batch['pixel_values'].to(self.device, dtype=self.weight_dtype)).latent_dist.sample()
                     latents = latents * 0.18215  ## TODO: Document magic number
 
                     # Sample noise
                     noise = torch.randn_like(latents)
                     bsz = latents.shape[0]
                     # Sample a random timestep for each image
-                    timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (bsz,), device=latents.device)
+                    timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (bsz,),
+                                              device=latents.device)
                     timesteps = timesteps.long()
 
                     # Add noise to the latents according to the noise magnitude at each timestep
@@ -703,12 +728,12 @@ class DistributedTrainer:
                     seconds_per_step = b_end - b_start
                     steps_per_second = 1 / seconds_per_step
                     rank_images_per_second = int(self.conf.batchSize) * steps_per_second
-                    #world_images_per_second = rank_images_per_second #* world_size
-                    samples_seen = self.global_step * int(self.conf.batchSize) #* world_size
+                    # world_images_per_second = rank_images_per_second # * world_size
+                    samples_seen = self.global_step * int(self.conf.batchSize)  # * world_size
 
                     # get global loss for logging
                     # torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
-                    loss = loss #/ world_size
+                    loss = loss  # / world_size
 
                     if self.rank == 0:
                         progress_bar.update(1)
@@ -720,19 +745,21 @@ class DistributedTrainer:
                             "train/step": self.global_step,
                             "train/samples_seen": samples_seen,
                             "perf/rank_samples_per_second": rank_images_per_second,
-                            #"perf/global_samples_per_second": world_images_per_second,
+                            # "perf/global_samples_per_second": world_images_per_second,
                         }
                         progress_bar.set_postfix(logs)
                         self.run.log(logs, step=self.global_step)
                         if self.global_step % 10 == 0 and self.global_step > 0:
-                            first_str_to_log = "steps/s: " + str(steps_per_second) + " imgs/s: " + str(rank_images_per_second) + " imgs seen: " + str(samples_seen)
-                            second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(self.lr_scheduler.get_last_lr()[0]) + " step: " + str(self.global_step)
+                            first_str_to_log = "steps/s: " + str(steps_per_second) + " imgs/s: " + str(
+                                rank_images_per_second) + " imgs seen: " + str(samples_seen)
+                            second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(
+                                self.lr_scheduler.get_last_lr()[0]) + " step: " + str(self.global_step)
                             first_opt_log = str(self.optimizer.tracker.global_progress)
                             self.log_queue.put(first_str_to_log)
                             self.log_queue.put(second_str_to_log)
                             self.log_queue.put(first_opt_log)
-                        #tqdm_out = progress_bar.format_dict()
-                        #print(str(tqdm_out))
+                        # tqdm_out = progress_bar.format_dict()
+                        # print(str(tqdm_out))
                         # if counter < 5:
                         #     counter += 1
                         # elif counter >= 5:
@@ -742,59 +769,65 @@ class DistributedTrainer:
                         #     }
                         #     print(data)
                         #     counter = 0
-                        #Thread(target=backgroundreport, args=(("http://" + conf.server + "/v1/post/ping"), "world_images_per_second")).start()
+                        # Thread(target=backgroundreport, args=(("http://" + conf.server + "/v1/post/ping"), "world_images_per_second")).start()
 
                     if self.conf.enable_inference:
-                        #hardcoded
+                        # hardcoded
                         if self.global_step % 500 == 0 and self.global_step > 0:
                             if self.rank == 0:
                                 # get prompt from random batch
-                                prompt = self.tokenizer.decode(batch['tokens'][random.randint(0, len(batch['tokens'])-1)])
+                                prompt = self.tokenizer.decode(
+                                    batch['tokens'][random.randint(0, len(batch['tokens']) - 1)])
 
                                 if self.conf.image_inference_scheduler == 'DDIMScheduler':
                                     print('using DDIMScheduler scheduler')
-                                    scheduler = DDIMScheduler.from_pretrained(self.conf.everyone.model, subfolder="scheduler", use_auth_token=self.conf.hftoken)
+                                    scheduler = DDIMScheduler.from_pretrained(self.conf.everyone.model,
+                                                                              subfolder="scheduler",
+                                                                              use_auth_token=self.conf.hftoken)
                                 else:
                                     print('using PNDMScheduler scheduler')
-                                    scheduler=PNDMScheduler.from_pretrained(self.conf.everyone.model, subfolder="scheduler", use_auth_token=self.conf.hftoken)
+                                    scheduler = PNDMScheduler.from_pretrained(self.conf.everyone.model,
+                                                                              subfolder="scheduler",
+                                                                              use_auth_token=self.conf.hftoken)
 
                                 pipeline = StableDiffusionPipeline(
-                                    text_encoder=self.text_encoder, #if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
+                                    text_encoder=self.text_encoder,
+                                    # if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
                                     vae=self.vae,
                                     unet=self.unet.module,
                                     tokenizer=self.tokenizer,
                                     scheduler=scheduler,
                                     safety_checker=None,  # disable safety checker to save memory
-                                    feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
+                                    feature_extractor=CLIPFeatureExtractor.from_pretrained(
+                                        "openai/clip-vit-base-patch32"),
                                 ).to(self.device)
                                 # inference
                                 if self.conf.enable_wandb:
                                     images = []
                                 else:
-                                    saveInferencePath = self.conf.intern.workingdir + "/inference"
-                                    os.makedirs(saveInferencePath, exist_ok=True)
+                                    save_inference_path = self.conf.intern.workingdir + "/inference"
+                                    os.makedirs(save_inference_path, exist_ok=True)
                                 with torch.no_grad():
                                     with torch.autocast('cuda', enabled=self.conf.everyone.fp16):
-                                        #hardcoded, twice
+                                        # hardcoded, twice
                                         for _ in range(5):
                                             if self.conf.local.wandb:
                                                 images.append(
-                                                    wandb.Image(pipeline(
-                                                        prompt, num_inference_steps=30
-                                                    ).images[0],
-                                                    caption=prompt)
+                                                    wandb.Image(pipeline(prompt, num_inference_steps=30).images[0],
+                                                                caption=prompt)
                                                 )
                                             else:
-                                                #hardcoded
+                                                # hardcoded
                                                 images = pipeline(prompt, num_inference_steps=30).images[0]
                                                 filenameImg = str(time.time_ns()) + ".png"
                                                 filenameTxt = str(time.time_ns()) + ".txt"
-                                                images.save(saveInferencePath + "/" + filenameImg)
-                                                with open(saveInferencePath + "/" + filenameTxt, 'a') as f:
+                                                images.save(save_inference_path + "/" + filenameImg)
+                                                with open(save_inference_path + "/" + filenameTxt, 'a') as f:
                                                     f.write('Used prompt: ' + prompt + '\n')
                                                     f.write('Generated Image Filename: ' + filenameImg + '\n')
                                                     f.write('Generated at: ' + str(self.global_step) + ' steps' + '\n')
-                                                    f.write('Generated at: ' + str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))+ '\n')
+                                                    f.write('Generated at: ' + str(
+                                                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + '\n')
 
                                 # log images under single caption
                                 if self.conf.enable_wandb:
@@ -811,14 +844,16 @@ class DistributedTrainer:
                 self.iethread.stop()
             pass
         except Exception as e:
-            print(f'Exception caught on rank {self.rank} at step {self.global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
+            print(
+                f'Exception caught on rank {self.rank} at step {self.global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
+            self._log_debugging()
             pass
 
         self.save_checkpoint()
         if self.conf.trainermode == "Relay":
             self.iethread.stop()
 
-        #cleanup()
+        # cleanup()
 
         print(get_gpu_ram())
         print('Done!')
@@ -871,6 +906,7 @@ class DistributedTrainer:
         print("DEVICE:", self.device)
         self.log_queue.put(("DEVICE: " + str(self.device)))
 
+
 def PyTorchTrainer(command_queue, log_queue):
     print(type(command_queue), flush=True)
     print(command_queue, flush=True)
@@ -883,11 +919,11 @@ def PyTorchTrainer(command_queue, log_queue):
             # this pickle could include sensitive data such as your
             # HuggingFace Token.
             with open("DO_NOT_DELETE_config.pickle", 'rb') as f:
-                    conf = pickle.load(f)
-            #stop is gonna be done inside the function, must change this later
+                conf = pickle.load(f)
+            # stop is gonna be done inside the function, must change this later
             trainer = DistributedTrainer(command_queue, log_queue, conf)
             trainer.train()
         elif command == 'stop':
-            #kill before it even starts????
+            # kill before it even starts????
             print('Bye!')
             return
