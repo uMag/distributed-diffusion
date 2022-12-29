@@ -3,3 +3,4 @@ utils/dataset/online/server/data/*
 workplace/*
 *.pyc
 DO_NOT_DELETE_config.pickle
+.idea/
