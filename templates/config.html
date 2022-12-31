@@ -75,10 +75,6 @@
             </label>
             <label for="wandb_token" class="sr-only">WandB Token</label>
             <input type="text" id="wandb_token" class="m-2 rounded border p-2" placeholder="WandB Token" />
-            <label for="enable_inference" class="flex items-center">
-              <input type="checkbox" id="enable_inference" class="m-2 rounded border p-2" placeholder="Enable Inference" />
-              <span>Enable Inference </span>
-            </label>
           </div>
         </div>
       </div>
@@ -158,7 +154,6 @@
             const external_ie = document.getElementById('external_ie').value;
             const enable_wandb = document.getElementById('enable_wandb').checked;
             const wandb_token = document.getElementById('wandb_token').value;
-            const enable_inference = document.getElementById('enable_inference').checked;
             
             const data = {
                 username: username,
@@ -184,7 +179,6 @@
                 external_ie: external_ie,
                 enable_wandb: enable_wandb,
                 wandb_token: wandb_token,
-                enable_inference: enable_inference,
             };
 
             console.log(JSON.stringify(data))
@@ -283,9 +277,6 @@
             if (data.wandb_token) {
             document.getElementById('wandb_token').value = data.wandb_token;
             }
-            if (data.enable_inference) {
-            document.getElementById('enable_inference').checked = data.enable_inference;
-            }
         });
         }
         // Call the get_conf function when the page loads
@@ -361,17 +352,13 @@
         function updateInputFieldsAndCheckboxes() {
             var enableWandbChecked = document.getElementById('enable_wandb').checked;
             var wandbTokenInput = document.getElementById('wandb_token');
-            var enableInferenceCheckbox = document.getElementById('enable_inference');
             
             if (enableWandbChecked) {
             wandbTokenInput.disabled = false;
-            enableInferenceCheckbox.disabled = false;
             } else {
             wandbTokenInput.disabled = true;
-            enableInferenceCheckbox.disabled = true;
             
             wandbTokenInput.value = '';
-            enableInferenceCheckbox.checked = false;
             }
         }
         

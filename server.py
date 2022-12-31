@@ -67,7 +67,6 @@ def submit_conf():
   conf.external_ie = data['external_ie']
   conf.enable_wandb = data['enable_wandb']
   conf.wandb_token = data['wandb_token']
-  conf.enable_inference = data['enable_inference']
   
   # hardcoded TODO: maybe one day we can add these to the webui
   conf.setdefault('intern', omegaconf.OmegaConf.create())
@@ -77,7 +76,6 @@ def submit_conf():
   conf.image_store_extended = True
   conf.image_store_resize = True # <--- Slow as fuck
   conf.image_store_no_migration = True
-  conf.image_inference_scheduler = 'DDIMScheduler'
   print(conf.server)
   # Get config from dataset server
   if MOTHER:
