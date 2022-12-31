@@ -23,10 +23,10 @@
         <input type="text" id="server" class="m-2 rounded border p-2" placeholder="Server" />
         <label for="image_count" class="sr-only">Image Count</label>
         <input type="number" id="image_count" class="m-2 rounded border p-2" placeholder="Image Count" />
-        <label for="batch_size" class="sr-only">Batch Size</label>
-        <input type="number" id="batch_size" class="m-2 rounded border p-2" placeholder="Batch Size" />
       </div>
       <div class="flex flex-col items-center">
+        <label for="batch_size" class="sr-only">Batch Size</label>
+        <input type="number" id="batch_size" class="m-2 rounded border p-2" placeholder="Batch Size" />
         <label for="hf_token" class="sr-only">HF Token</label>
         <input type="text" id="hf_token" class="m-2 rounded border p-2" placeholder="HF Token" />
         <!-- <label for="save_steps" class="sr-only">Save Steps</label>
@@ -53,6 +53,8 @@
             <input type="checkbox" id="enable_stats" class="m-2 rounded border p-2" placeholder="Enable Stats"/>
             <span>Enable Stats</span>
           </label>
+          <label for="stats_ip" class="sr-only">Stats Server</label>
+          <input type="text" id="stats_ip" class="m-2 w-40 rounded border p-2" placeholder="Stats Server IP" />
           <label for="geoaprox" class="flex items-center">
             <input type="checkbox" id="geoaprox" class="m-2 rounded border p-2" placeholder="geoaprox"/>
             <span>Geolocation</span>
@@ -141,6 +143,7 @@
             const xformers = document.getElementById('xformers').checked;
             const eightbitadam = document.getElementById('8bit_adam').checked;
             const enablestats = document.getElementById('enable_stats').checked;
+            const stats_ip = document.getElementById('stats_ip').value;
             const geoaprox = document.getElementById('geoaprox').checked;
             const bandwidth = document.getElementById('bandwidth').checked;
             const specs = document.getElementById('specs').checked;
@@ -166,6 +169,7 @@
                 xformers: xformers,
                 eightbitadam: eightbitadam,
                 enablestats: enablestats,
+                stats_ip: stats_ip,
                 geoaprox: geoaprox,
                 bandwidth: bandwidth,
                 specs: specs,
@@ -237,6 +241,9 @@
             }
             if (data.enablestats) {
               document.getElementById('enable_stats').checked = data.enablestats;
+            }
+            if (data.stats_ip) {
+            document.getElementById('stats_ip').value = data.stats_ip;
             }
             if (data.geoaprox) {
             document.getElementById('geoaprox').checked = data.geoaprox;
@@ -322,22 +329,21 @@
         <script>
         function updateCheckboxes() {
             var enableStatsChecked = document.getElementById('enable_stats').checked;
+            var stats_ipInput = document.getElementById('stats_ip');
             var geoaproxCheckbox = document.getElementById('geoaprox');
             var bandwidthCheckbox = document.getElementById('bandwidth');
             var specsCheckbox = document.getElementById('specs');
             
             if (enableStatsChecked) {
+              stats_ipInput.disabled = false;
             geoaproxCheckbox.disabled = false;
             bandwidthCheckbox.disabled = false;
             specsCheckbox.disabled = false;
             } else {
+            stats_ipInput.disabled = true;
             geoaproxCheckbox.disabled = true;
             bandwidthCheckbox.disabled = true;
             specsCheckbox.disabled = true;
-            
-            geoaproxCheckbox.checked = false;
-            bandwidthCheckbox.checked = false;
-            specsCheckbox.checked = false;
             }
         }
         

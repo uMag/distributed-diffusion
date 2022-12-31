@@ -53,6 +53,7 @@ def submit_conf():
   conf.gradckpt = data['gradckpt']
   conf.xformers = data['xformers']
   conf.eightbitadam = data['eightbitadam']
+  conf.stats_ip = data['stats_ip']
   conf.enablestats = data['enablestats']
   conf.geoaprox = data['geoaprox']
   conf.bandwidth = data['bandwidth']

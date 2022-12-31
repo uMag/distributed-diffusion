@@ -452,125 +452,128 @@ class DistributedTrainer:
 
             self.log_queue.put("Global IP: " + str(computer_ip))
 
-        # # statistics
-        # if conf.enablestats:
-        #     statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
-        #     bandwidthstats = {}
-        #     specs_stats = {}
-        #     print("Stats enabled")
-        #     log_queue.put("Public Telemetry enabled.")
+        # statistics
+        if self.conf.enablestats:
+            import sys
+            statconfig = {"geoaprox": False, "bandwidth": False, "specs": False}
+            bandwidthstats = {}
+            specs_stats = {}
+            print("Stats enabled")
+            self.log_queue.put("Public Telemetry enabled.")
 
-        #     if conf.geoaprox:
-        #         log_queue.put("Geolocation Aproximation enabled (server-side)")
-        #         statconfig['geoaprox'] = True
+            if self.conf.geoaprox:
+                self.log_queue.put("Geolocation Aproximation enabled (server-side)")
+                statconfig['geoaprox'] = True
 
-        #     if conf.bandwidth:
-        #         log_queue.put("Bandwidth enabled (client-side)")
-        #         statconfig["bandwidth"] = True
-        #         import speedtest
-        #         session = speedtest.Speedtest()
-        #         download = session.download()
-        #         upload = session.upload()
-        #         ping = session.results.ping
-        #         bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
+            if self.conf.bandwidth:
+                self.log_queue.put("Bandwidth enabled (client-side)")
+                statconfig["bandwidth"] = True
+                import speedtest
+                session = speedtest.Speedtest()
+                download = session.download()
+                upload = session.upload()
+                ping = session.results.ping
+                bandwidthstats = {"download": str(download), "upload": str(upload), "ping": str(ping)}
 
-        #     if conf.specs:
-        #         log_queue.put("Specs enabled (client-side)")
-        #         statconfig["specs"] = True
-        #         # GPU
-        #         # https://docs.nvidia.com/deploy/nvml-api/index.html
-        #         pynvml.nvmlInit()
-        #         cudadriver_version = pynvml.nvmlSystemGetCudaDriverVersion()
-        #         driver_version = pynvml.nvmlSystemGetDriverVersion()
-        #         NVML_version = pynvml.nvmlSystemGetNVMLVersion()
+            if self.conf.specs:
+                self.log_queue.put("Specs enabled (client-side)")
+                statconfig["specs"] = True
+                # GPU
+                # https://docs.nvidia.com/deploy/nvml-api/index.html
+                pynvml.nvmlInit()
+                cudadriver_version = pynvml.nvmlSystemGetCudaDriverVersion()
+                driver_version = pynvml.nvmlSystemGetDriverVersion()
+                NVML_version = pynvml.nvmlSystemGetNVMLVersion()
 
-        #         #TODO: Assuming one gpu only
-        #         cudadev = torch.cuda.current_device()
-        #         nvml_device = pynvml.nvmlDeviceGetHandleByIndex(cudadev)
+                #TODO: Assuming one gpu only
+                cudadev = torch.cuda.current_device()
+                nvml_device = pynvml.nvmlDeviceGetHandleByIndex(cudadev)
 
-        #         #psu_info = pynvml.nvmlUnitGetPsuInfo(pynvml.c_nvmlPSUInfo_t.)
-        #         #temperature_info = pynvml.nvmlUnitGetTemperature(nvml_device)
-        #         #unit_info = pynvml.nvmlUnitGetUnitInfo(nvml_device)
+                #psu_info = pynvml.nvmlUnitGetPsuInfo(pynvml.c_nvmlPSUInfo_t.)
+                #temperature_info = pynvml.nvmlUnitGetTemperature(nvml_device)
+                #unit_info = pynvml.nvmlUnitGetUnitInfo(nvml_device)
 
-        #         arch_info = pynvml.nvmlDeviceGetArchitecture(nvml_device)
-        #         brand_info = pynvml.nvmlDeviceGetBrand(nvml_device)
-        #         #clock_info = pynvml.nvmlDeviceGetClock(nvml_device)
-        #         #clockinfo_info = pynvml.nvmlDeviceGetClockInfo(nvml_device)
-        #         #maxclock_info = pynvml.nvmlDeviceGetMaxClockInfo(nvml_device)
-        #         computemode_info = pynvml.nvmlDeviceGetComputeMode(nvml_device)
-        #         compute_compatability = pynvml.nvmlDeviceGetCudaComputeCapability(nvml_device)
+                arch_info = pynvml.nvmlDeviceGetArchitecture(nvml_device)
+                brand_info = pynvml.nvmlDeviceGetBrand(nvml_device)
+                #clock_info = pynvml.nvmlDeviceGetClock(nvml_device)
+                #clockinfo_info = pynvml.nvmlDeviceGetClockInfo(nvml_device)
+                #maxclock_info = pynvml.nvmlDeviceGetMaxClockInfo(nvml_device)
+                computemode_info = pynvml.nvmlDeviceGetComputeMode(nvml_device)
+                compute_compatability = pynvml.nvmlDeviceGetCudaComputeCapability(nvml_device)
 
-        #         pcie_link_gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(nvml_device)
-        #         pcie_width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(nvml_device)
+                pcie_link_gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(nvml_device)
+                pcie_width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(nvml_device)
 
-        #         display_active_bool = pynvml.nvmlDeviceGetDisplayActive(nvml_device)
+                display_active_bool = pynvml.nvmlDeviceGetDisplayActive(nvml_device)
 
-        #         #memory_info = pynvml.nvmlDeviceGetMemoryInfo(nvml_device)
+                #memory_info = pynvml.nvmlDeviceGetMemoryInfo(nvml_device)
 
-        #         gpu_energy_cons = pynvml.nvmlDeviceGetTotalEnergyConsumption(nvml_device)
-        #         device_name = pynvml.nvmlDeviceGetName(nvml_device)
+                gpu_energy_cons = pynvml.nvmlDeviceGetTotalEnergyConsumption(nvml_device)
+                device_name = pynvml.nvmlDeviceGetName(nvml_device)
 
-        #         gpusinfo = {
-        #             "software": {
-        #                 "CUDA_DRIVER_VERSION": str(cudadriver_version),
-        #                 "NVIDIA_DRIVER_VERSION": str(driver_version),
-        #                 "NVML_VERSION": str(NVML_version),
-        #             },
-        #             "hardware": {
-        #                 "energy": {
-        #                     #"PSU_INFO": psu_info,
-        #                     #"TEMPERATURE_INFO": temperature_info,
-        #                     "ENERGY_CONSUMPTION": str(gpu_energy_cons)
-        #                 },
-        #                 "info": {
-        #                     #"UNIT_INFO": unit_info,
-        #                     "BRAND_INFO": str(brand_info),
-        #                     "DEV_NAME": str(device_name),
-        #                     "DISPLAY_ACTIVE": str(display_active_bool),
-        #                     "ARCH_INFO": str(arch_info)
-        #                 },
-        #                 "memory": {
-        #                     "PCIE_LINK_GEN": str(pcie_link_gen),
-        #                     "PCIE_WIDTH": str(pcie_width),
-        #                     #"MEMORY_INFO": memory_info,
-        #                 },
-        #                 "compute": {
-        #                     #"CLOCK": clock_info,
-        #                     #"CLOCK_INFO": clockinfo_info,
-        #                     #"MAX_CLOCK": maxclock_info,
-        #                     "COMPUTE_MODE": str(computemode_info),
-        #                     "COMPUTE_COMPATABILITY": str(compute_compatability)
-        #                 }
-        #             }
-        #         }
+                gpusinfo = {
+                    "software": {
+                        "CUDA_DRIVER_VERSION": str(cudadriver_version),
+                        "NVIDIA_DRIVER_VERSION": str(driver_version),
+                        "NVML_VERSION": str(NVML_version),
+                    },
+                    "hardware": {
+                        "energy": {
+                            #"PSU_INFO": psu_info,
+                            #"TEMPERATURE_INFO": temperature_info,
+                            "ENERGY_CONSUMPTION": str(gpu_energy_cons)
+                        },
+                        "info": {
+                            #"UNIT_INFO": unit_info,
+                            "BRAND_INFO": str(brand_info),
+                            "DEV_NAME": str(device_name),
+                            "DISPLAY_ACTIVE": str(display_active_bool),
+                            "ARCH_INFO": str(arch_info)
+                        },
+                        "memory": {
+                            "PCIE_LINK_GEN": str(pcie_link_gen),
+                            "PCIE_WIDTH": str(pcie_width),
+                            #"MEMORY_INFO": memory_info,
+                        },
+                        "compute": {
+                            #"CLOCK": clock_info,
+                            #"CLOCK_INFO": clockinfo_info,
+                            #"MAX_CLOCK": maxclock_info,
+                            "COMPUTE_MODE": str(computemode_info),
+                            "COMPUTE_COMPATABILITY": str(compute_compatability)
+                        }
+                    }
+                }
 
-        #         cpuinfo = {}
-        #         import cpuinfo
-        #         cpudict = cpuinfo.get_cpu_info()
-        #         cpuinfo = {
-        #             'CPU_ARCH': str(cpudict['arch']),
-        #             "CPU_HZ_AD": str(cpudict["hz_advertised_friendly"]),
-        #             "CPU_HZ_AC": str(cpudict["hz_actual_friendly"]),
-        #             "CPU_BITS": str(cpudict["bits"]),
-        #             "VENDOR_ID": str(cpudict["vendor_id_raw"]),
-        #             #"HARDWARE_RAW": cpudict["hardware_raw"],
-        #             "BRAND_RAW": str(cpudict["brand_raw"])
-        #         }
+                cpuinfo = {}
+                import cpuinfo
+                cpudict = cpuinfo.get_cpu_info()
+                cpuinfo = {
+                    'CPU_ARCH': str(cpudict['arch']),
+                    "CPU_HZ_AD": str(cpudict["hz_advertised_friendly"]),
+                    "CPU_HZ_AC": str(cpudict["hz_actual_friendly"]),
+                    "CPU_BITS": str(cpudict["bits"]),
+                    "VENDOR_ID": str(cpudict["vendor_id_raw"]),
+                    #"HARDWARE_RAW": cpudict["hardware_raw"],
+                    "BRAND_RAW": str(cpudict["brand_raw"])
+                }
 
-        #         specs_stats = {'gpu': gpusinfo, 'cpu': cpuinfo}
-        #     statsjson = {
-        #         'python_ver': str(sys.version),
-        #         'config': statconfig,
-        #         'bandwidth': bandwidthstats,
-        #         'specs': specs_stats
-        #     }
-        #     print(statsjson)
-        #     pstats = requests.post('http://' + conf.server + '/v1/post/stats', json=json.dumps(statsjson))
-        #     if pstats.status_code != 200:
-        #         log_queue.put("Failed to report telemetry")
-        #         raise ConnectionError("Failed to report stats")
-        #     else:
-        #         log_queue.put("Telemetry reported successfully")
+                specs_stats = {'gpu': gpusinfo, 'cpu': cpuinfo}
+            statsjson = {
+                'python_ver': str(sys.version),
+                'config': statconfig,
+                'bandwidth': bandwidthstats,
+                'specs': specs_stats
+            }
+            print(statsjson)
+            #TODO: Add stat server entry
+            open('example.json', 'w').write(json.dumps(statsjson))
+            pstats = requests.post('http://' + self.conf.stats_ip + '/v1/telemetry', json=json.dumps(statsjson))
+            if pstats.status_code != 200:
+                self.log_queue.put("Failed to report telemetry")
+                raise ConnectionError("Failed to report stats")
+            else:
+                self.log_queue.put("Telemetry reported successfully")
 
         # create ema
         if self.conf.everyone.use_ema:
