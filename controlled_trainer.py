@@ -568,7 +568,7 @@ class DistributedTrainer:
             print(statsjson)
             #TODO: Add stat server entry
             open('example.json', 'w').write(json.dumps(statsjson))
-            pstats = requests.post('http://' + self.conf.stats_ip + '/v1/telemetry', json=json.dumps(statsjson))
+            pstats = requests.post('http://' + self.conf.stats_ip + 'api/v1/telemetry', json=json.dumps(statsjson))
             if pstats.status_code != 200:
                 self.log_queue.put("Failed to report telemetry")
                 raise ConnectionError("Failed to report stats")

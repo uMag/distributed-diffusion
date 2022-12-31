@@ -5,3 +5,5 @@ workplace/*
 DO_NOT_DELETE_config.pickle
 .idea/
 __pycache__/
+data.db
+database.db
