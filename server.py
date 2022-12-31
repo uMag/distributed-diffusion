@@ -13,8 +13,14 @@ MOTHER = False
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--webui_port', help='Port to use for the WebUI', default=5080)
+parser.add_argument('-m', '--mother', type=str, help='Run as Mother peer, include the conf file to use')
 parser.add_argument('-t', '--tunnel', action='store_true', help='Enable Cloudflare Tunneling to WebUI')
 args = parser.parse_args()
+
+if args.mother:
+  MOTHER = True
+  print("Warning, started as mother peer")
+
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -75,26 +81,8 @@ def submit_conf():
   print(conf.server)
   # Get config from dataset server
   if MOTHER:
-    conf.setdefault('everyone', omegaconf.OmegaConf.create())
-    conf.everyone.model = "runwayml/stable-diffusion-v1-5"
-    conf.everyone.extended_chunks = 2
-    conf.everyone.clip_penultimate = True
-    conf.everyone.fp16 = True
-    conf.everyone.resolution = 512
-    conf.everyone.seed = 42
-    conf.everyone.train_text_encoder = True
-    conf.everyone.lr = float(5e-6)
-    conf.everyone.ucg = float(0.1)
-    conf.everyone.use_ema = False
-    conf.everyone.lr_scheduler = "cosine"
-    conf.everyone.opt_betas_one = 0.9
-    conf.everyone.opt_betas_two = 0.999
-    conf.everyone.opt_epsilon = float(1e-08)
-    conf.everyone.opt_weight_decay = float(1e-2)
-    conf.everyone.buckets_shuffle = True
-    conf.everyone.buckets_side_min = 256
-    conf.everyone.buckets_side_max = 512
-    conf.everyone.lr_scheduler_warmup = 0.05
+    conf.everyone = omegaconf.OmegaConf.load(args.mother)
+    conf.mother = True
   else:
     server_provided_config = requests.get('http://' + conf.server + '/globalconf')
     if server_provided_config.status_code == 200:

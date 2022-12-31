@@ -48,7 +48,6 @@ from hivemind import Float16Compression
 
 from utils.data import ImageStore, SimpleBucket, AspectDataset, EMAModel
 
-MOTHER = False
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # Connect to the database
@@ -130,19 +129,6 @@ def setuphivemind(conf, log_queue):
         shutil.rmtree(conf.intern.workingdir)
     os.makedirs(conf.intern.workingdir)
 
-    # if requests.get('http://' + conf.server + '/info').status_code == 200:
-    #     print("Connection Success")
-    #     log_queue.put("Connected to the dataset server, retrieving lr_scheduler configuration")
-    #     serverconfig = json.loads(requests.get('http://' + conf.server + '/v1/get/lr_schel_conf').content)
-    #     print(serverconfig)
-    #     imgs_per_epoch = int(serverconfig["ImagesPerEpoch"])
-    #     total_epochs = int(serverconfig["Epochs"])
-    #     return(imgs_per_epoch, total_epochs)
-    # else:
-    #     log_queue.put("Unable to connect to the dataset server")
-    #     raise ConnectionError("Unable to connect to server")
-
-
 def getchunk(amount, conf, log_queue):
     log_queue.put("Requesting Chunks")
     if os.path.isdir(conf.intern.tmpdataset):
@@ -221,7 +207,7 @@ def informationExchangeServer(conf, maddrs):
 
     @app.route('/peer')
     def peer():
-        return jsonify(maddrs)
+        return maddrs
 
     @app.route('/globalconf')
     def globalconf():
@@ -236,7 +222,6 @@ def informationExchangeServer(conf, maddrs):
             "lr": conf.everyone.lr,
             "ucg": conf.everyone.ucg,
             "use_ema": conf.everyone.use_ema,
-            "lr_scheduler": conf.everyone.lr_scheduler,
             # Advanced, do not touch
             "opt_betas_one": conf.everyone.opt_betas_one,
             "opt_betas_two": conf.everyone.opt_betas_two,
@@ -245,7 +230,6 @@ def informationExchangeServer(conf, maddrs):
             "buckets_shuffle": conf.everyone.buckets_shuffle,
             "buckets_side_min": conf.everyone.buckets_side_min,
             "buckets_side_max": conf.everyone.buckets_side_max,
-            "lr_scheduler_warmup": conf.everyone.lr_scheduler_warmup
             # Recheck this in the future if we get grad offloading with HM
         }
         return jsonify(dict_with_configuration)
@@ -356,7 +340,7 @@ class DistributedTrainer:
 
         # Hivemind Setup
         # get network peers (if mother peer then ignore)
-        if MOTHER is False:
+        if self.conf.mother is False:
             rmaddrs_rq = requests.get('http://' + self.conf.server + "/peer")
             if rmaddrs_rq.status_code == 200:
                 _peer_list = json.loads(rmaddrs_rq.content)
@@ -375,9 +359,9 @@ class DistributedTrainer:
             _client_mode = False
 
             # set local maddrs ports
+            # Warning: It is highly recommended to not use UDP due to it being very unstable.
+            # Further information: https://discord.com/channels/865254854262652969/865254854967427124/1057781288318271518
             host_maddrs_tcp = "/ip4/0.0.0.0/tcp/" + str(self.conf.internal_tcp)
-            # host_maddrs_udp = "/ip4/0.0.0.0/udp/" + str(conf.internal_udp) + "/quic"
-            # host_maddrs_full = [host_maddrs_tcp, host_maddrs_udp]
             _host_maddrs_full = [host_maddrs_tcp]
 
             # set public to-be-announced maddrs
@@ -387,6 +371,7 @@ class DistributedTrainer:
 
             if self.conf.publicip == "auto" or self.conf.publicip is None:
                 _ip = self._get_ip_online()
+                self.log_queue.put("IP Detected!")
                 self.ipsrc = "online"
             else:
                 self.log_queue.put("Loading public IP from configuration")
@@ -399,10 +384,8 @@ class DistributedTrainer:
             except Exception:
                 self.log_queue.put("Invalid IP, please check the configuration file. IP Source: " + self.ipsrc)
                 raise ValueError("Invalid IP, please check the configuration file. IP Source: " + self.ipsrc)
-
+            
             public_maddrs_tcp = "/ip4/" + self.ip + "/tcp/" + str(self.conf.external_tcp)
-            # public_maddrs_udp = "/ip4/" + ip + "/udp/" + str(conf.external_udp) + "/quic"
-            # public_maddrs_full = [public_maddrs_tcp, public_maddrs_udp]
             _public_maddrs_full = [public_maddrs_tcp]
         else:
             raise ValueError(f"Trainer mode {self.conf.trainermode} currently not supported")
@@ -427,20 +410,12 @@ class DistributedTrainer:
             self.optimizer_parameters,
             # optimizer_class=optimizer_cls,
             # parameters_as_bucket_view=True,
-            lr=float(self.conf.everyone.lr),
+            lr=(float(self.conf.everyone.lr) * int(self.conf.batchSize)),
             betas=(float(self.conf.everyone.opt_betas_one), float(self.conf.everyone.opt_betas_two)),
             eps=float(self.conf.everyone.opt_epsilon),
             weight_decay=float(self.conf.everyone.opt_weight_decay),
         )
         print("Finished standard optimizer")
-
-        self.lr_scheduler = get_scheduler(
-            self.conf.everyone.lr_scheduler,
-            optimizer=tmp_optimizer,
-            num_warmup_steps=int(
-                float(self.conf.everyone.lr_scheduler_warmup) * self.imgs_per_epoch * self.total_epochs),
-            num_training_steps=self.total_epochs * self.imgs_per_epoch,
-        )
 
         print("Starting hivemind optimizer")
 
@@ -458,18 +433,24 @@ class DistributedTrainer:
             grad_compression=_compression,
             state_averaging_compression=_compression,
             verbose=True,
-            scheduler=self.lr_scheduler
         )
 
         print("Finished hivemind optimizer")
 
-        print('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
-        print("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
         self.log_queue.put("Hivemind Optimizer and DHT started successfully!")
-        self.log_queue.put(
-            "You can share the following initial_perrs to other nodes so they connect directly through this node:")
-        self.log_queue.put('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
-        self.log_queue.put("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
+
+        if self.conf.trainermode == "Relay":
+            print('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
+            print("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
+            self.log_queue.put(
+                "Direct Hivemind mADDR (DHT only):")
+            self.log_queue.put('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
+            if hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()) == "":
+                computer_ip = self.ip
+            else:
+                computer_ip = hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs())
+
+            self.log_queue.put("Global IP: " + str(computer_ip))
 
         # # statistics
         # if conf.enablestats:
@@ -599,9 +580,12 @@ class DistributedTrainer:
             self.use_ema = False
 
         if self.conf.trainermode == "Relay":
-            # open IE server
-            self.iethread = informationExchangeServer(self.conf, self.dht.get_visible_maddrs())
+            maddrs_list = []
+            for addr in self.dht.get_visible_maddrs():
+                maddrs_list.append(str(addr))
+            self.iethread = informationExchangeServer(self.conf, maddrs_list)
             self.iethread.start()
+            self.log_queue.put("IE Server started at: " + str(computer_ip) + ":" + str(self.conf.external_ie))
 
         print(get_gpu_ram())
 
@@ -635,17 +619,10 @@ class DistributedTrainer:
     def train(self):
         # train!
         try:
-            already_done_steps = (self.optimizer.tracker.global_progress.samples_accumulated +
-                                  (self.optimizer.tracker.global_progress.epoch * self.optimizer.target_batch_size))
-            print("Skipping", already_done_steps, "steps on the LR Scheduler.")
-            self.log_queue.put("Skipping " + str(already_done_steps) + " steps on the LR Scheduler.")
-            for i in range(already_done_steps):
-                self.lr_scheduler.step()
             print("Done")
             while True:
                 print(get_gpu_ram())
                 print("Getting chunks")
-                # only provide domain (ex.: 127.0.0.1:8080 or sail.pe:9000) here, http:// is added in the function.
                 getchunk(self.conf.imageCount, self.conf, self.log_queue)
 
                 # Note: we removed worldsize here
@@ -717,7 +694,7 @@ class DistributedTrainer:
                         torch.nn.utils.clip_grad_norm_(self.text_encoder.parameters(), 1.0)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
-                    self.lr_scheduler.step()
+                    # self.lr_scheduler.step()
                     self.optimizer.zero_grad()
 
                     # Update EMA
@@ -737,24 +714,25 @@ class DistributedTrainer:
                     loss = loss  # / world_size
 
                     if self.rank == 0:
+
                         progress_bar.update(1)
                         self.global_step += 1
                         logs = {
                             "train/loss": loss.detach().item(),
-                            "train/lr": self.lr_scheduler.get_last_lr()[0],
                             "train/epoch": 1,
                             "train/step": self.global_step,
+                            "train/lr": self.optimizer.state_dict()['param_groups'][0]['lr'],
                             "train/samples_seen": samples_seen,
                             "perf/rank_samples_per_second": rank_images_per_second,
                             # "perf/global_samples_per_second": world_images_per_second,
                         }
                         progress_bar.set_postfix(logs)
                         self.run.log(logs, step=self.global_step)
-                        if self.global_step % 10 == 0 and self.global_step > 0:
+                        if self.global_step % 20 == 0 and self.global_step > 0:
                             first_str_to_log = "steps/s: " + str(steps_per_second) + " imgs/s: " + str(
                                 rank_images_per_second) + " imgs seen: " + str(samples_seen)
                             second_str_to_log = "loss: " + str(loss.detach().item()) + " lr: " + str(
-                                self.lr_scheduler.get_last_lr()[0]) + " step: " + str(self.global_step)
+                                self.optimizer.state_dict()['param_groups'][0]['lr']) + " step: " + str(self.global_step)
                             first_opt_log = str(self.optimizer.tracker.global_progress)
                             self.log_queue.put(first_str_to_log)
                             self.log_queue.put(second_str_to_log)
@@ -772,71 +750,6 @@ class DistributedTrainer:
                         #     counter = 0
                         # Thread(target=backgroundreport, args=(("http://" + conf.server + "/v1/post/ping"), "world_images_per_second")).start()
 
-                    if self.conf.enable_inference:
-                        # hardcoded
-                        if self.global_step % 500 == 0 and self.global_step > 0:
-                            if self.rank == 0:
-                                # get prompt from random batch
-                                prompt = self.tokenizer.decode(
-                                    batch['tokens'][random.randint(0, len(batch['tokens']) - 1)])
-
-                                if self.conf.image_inference_scheduler == 'DDIMScheduler':
-                                    print('using DDIMScheduler scheduler')
-                                    scheduler = DDIMScheduler.from_pretrained(self.conf.everyone.model,
-                                                                              subfolder="scheduler",
-                                                                              use_auth_token=self.conf.hftoken)
-                                else:
-                                    print('using PNDMScheduler scheduler')
-                                    scheduler = PNDMScheduler.from_pretrained(self.conf.everyone.model,
-                                                                              subfolder="scheduler",
-                                                                              use_auth_token=self.conf.hftoken)
-
-                                pipeline = StableDiffusionPipeline(
-                                    text_encoder=self.text_encoder,
-                                    # if type(text_encoder) is not torch.nn.parallel.DistributedDataParallel else text_encoder.module,
-                                    vae=self.vae,
-                                    unet=self.unet.module,
-                                    tokenizer=self.tokenizer,
-                                    scheduler=scheduler,
-                                    safety_checker=None,  # disable safety checker to save memory
-                                    feature_extractor=CLIPFeatureExtractor.from_pretrained(
-                                        "openai/clip-vit-base-patch32"),
-                                ).to(self.device)
-                                # inference
-                                if self.conf.enable_wandb:
-                                    images = []
-                                else:
-                                    save_inference_path = self.conf.intern.workingdir + "/inference"
-                                    os.makedirs(save_inference_path, exist_ok=True)
-                                with torch.no_grad():
-                                    with torch.autocast('cuda', enabled=self.conf.everyone.fp16):
-                                        # hardcoded, twice
-                                        for _ in range(5):
-                                            if self.conf.local.wandb:
-                                                images.append(
-                                                    wandb.Image(pipeline(prompt, num_inference_steps=30).images[0],
-                                                                caption=prompt)
-                                                )
-                                            else:
-                                                # hardcoded
-                                                images = pipeline(prompt, num_inference_steps=30).images[0]
-                                                filenameImg = str(time.time_ns()) + ".png"
-                                                filenameTxt = str(time.time_ns()) + ".txt"
-                                                images.save(save_inference_path + "/" + filenameImg)
-                                                with open(save_inference_path + "/" + filenameTxt, 'a') as f:
-                                                    f.write('Used prompt: ' + prompt + '\n')
-                                                    f.write('Generated Image Filename: ' + filenameImg + '\n')
-                                                    f.write('Generated at: ' + str(self.global_step) + ' steps' + '\n')
-                                                    f.write('Generated at: ' + str(
-                                                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')) + '\n')
-
-                                # log images under single caption
-                                if self.conf.enable_wandb:
-                                    self.run.log({'images': images}, step=self.global_step)
-
-                                # cleanup so we don't run out of memory
-                                del pipeline
-                                gc.collect()
         except StopTrainingException as e:
             print("Stopping Training upon user request")
             print("TRAINING_STOPPED")

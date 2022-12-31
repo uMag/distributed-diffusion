@@ -4,3 +4,4 @@ workplace/*
 *.pyc
 DO_NOT_DELETE_config.pickle
 .idea/
+__pycache__/
