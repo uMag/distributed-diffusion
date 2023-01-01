@@ -15,6 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--webui_port', help='Port to use for the WebUI', default=5080)
 parser.add_argument('-m', '--mother', type=str, help='Run as Mother peer, include the conf file to use')
 parser.add_argument('-t', '--tunnel', action='store_true', help='Enable Cloudflare Tunneling to WebUI')
+parser.add_argument('-s', '--secret', action=str)
 args = parser.parse_args()
 
 if args.mother:
@@ -79,6 +80,9 @@ def submit_conf():
   conf.image_store_no_migration = True
   print(conf.server)
   # Get config from dataset server
+  if args.secret:
+    conf.sendloss = True
+    conf.secretpass = args.secret
   if MOTHER:
     conf.everyone = omegaconf.OmegaConf.load(args.mother)
     conf.mother = True

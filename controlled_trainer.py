@@ -130,7 +130,16 @@ def setuphivemind(conf, log_queue):
     os.makedirs(conf.intern.workingdir)
 
 def pingGeo(server):
-    requests.get('http://' + server + '/ping_geo')
+    requests.get('http://' + server + '/api/v1/get/announcelocation')
+
+def sendLoss(server, secretpass, currloss):
+    import socket
+    requests.post(
+        'http://' + server + '/api/v1/private/postloss',
+         auth=(socket.gethostname(), secretpass),
+         json={"time": time.time, 'loss': currloss}
+         )
+
 
 def getchunk(amount, conf, log_queue):
     log_queue.put("Requesting Chunks")
@@ -601,8 +610,11 @@ class DistributedTrainer:
                             threading.Thread(target=pingGeo, args=self.conf.stats_ip).start()
                         progress_bar.update(1)
                         self.global_step += 1
+                        currloss = loss.detach().item()
+                        if self.conf.sendloss:
+                            threading.Thread(target=sendLoss, args=(self.conf.stats_ip, self.conf.secretpass, currloss)).start()
                         logs = {
-                            "train/loss": loss.detach().item(),
+                            "train/loss": currloss,
                             "train/epoch": 1,
                             "train/step": self.global_step,
                             "train/lr": self.optimizer.state_dict()['param_groups'][0]['lr'],
