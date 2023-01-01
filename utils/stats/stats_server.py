@@ -3,8 +3,14 @@ from threading import Timer
 
 from flask import Flask, request, jsonify
 from ip2geotools.databases.noncommercial import DbIpCity
+import requests
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
+
+ip = requests.get("https://api.ipify.org/", timeout=5).text
+print(ip)
 
 # Create a list to store the client's geo location and timestamp
 client_locations = []
@@ -67,4 +73,5 @@ def get_client_locations():
     return jsonify(full_list)
 
 if __name__ == '__main__':
-    app.run()
+    context = ('fullchain.pem', 'privkey.pem')
+    app.run(host="0.0.0.0", port=8010, ssl_context=context)
