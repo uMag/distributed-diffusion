@@ -80,6 +80,7 @@ def submit_conf():
   conf.image_store_no_migration = True
   print(conf.server)
   # Get config from dataset server
+  conf.sendloss = False
   if args.secret:
     conf.sendloss = True
     conf.secretpass = args.secret
@@ -87,6 +88,7 @@ def submit_conf():
     conf.everyone = omegaconf.OmegaConf.load(args.mother)
     conf.mother = True
   else:
+    conf.mother = False
     server_provided_config = requests.get('http://' + conf.server + '/globalconf')
     if server_provided_config.status_code == 200:
       server_provided_config = server_provided_config.json()
