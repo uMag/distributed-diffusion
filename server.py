@@ -103,7 +103,6 @@ def submit_conf():
     conf.everyone.lr = float(server_provided_config['lr'])
     conf.everyone.ucg = float(server_provided_config['ucg'])
     conf.everyone.use_ema = bool(server_provided_config['use_ema'])
-    conf.everyone.lr_scheduler = server_provided_config['lr_scheduler']
     conf.everyone.opt_betas_one = float(server_provided_config['opt_betas_one'])
     conf.everyone.opt_betas_two = float(server_provided_config['opt_betas_two'])
     conf.everyone.opt_epsilon = float(server_provided_config['opt_epsilon'])
@@ -111,7 +110,6 @@ def submit_conf():
     conf.everyone.buckets_shuffle = bool(server_provided_config['buckets_shuffle'])
     conf.everyone.buckets_side_min = int(server_provided_config['buckets_side_min'])
     conf.everyone.buckets_side_max = int(server_provided_config['buckets_side_max'])
-    conf.everyone.lr_scheduler_warmup = float(server_provided_config['lr_scheduler_warmup'])
 
   print(conf)
 
