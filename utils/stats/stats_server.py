@@ -1,53 +1,70 @@
-import hashlib
-from flask import Flask, request
-import sqlite3
-import datetime
-from ip2geotools.databases.noncommercial import DbIpCity
+import time
+from threading import Timer
 
-PATH_TO_USER_DB = "database.db"
-PATH_TO_DATA_DB = "data.db"
+from flask import Flask, request, jsonify
+from ip2geotools.databases.noncommercial import DbIpCity
 
 app = Flask(__name__)
 
-@app.route('/api/v1/telemetry', methods=['POST'])
-def save_data():
-    # Extract the username and password from the request
-    jsonpop = request.get_json()
-    username = jsonpop['username']
-    password = jsonpop['password']
+# Create a list to store the client's geo location and timestamp
+client_locations = []
 
-    # Hash the password using the SHA256 algorithm
-    hashed_password = hashlib.sha256(password.encode('utf-8')).hexdigest()
+# Create a timer to remove old entries from the list
+def cleanup_client_locations():
+    now = time.time()
+    for client_location in client_locations:
+        if now - client_location['timestamp'] > 7 * 60:
+            client_locations.remove(client_location)
+    # Schedule the next cleanup
+    Timer(60, cleanup_client_locations).start()
 
-    # Connect to the database
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
+# Start the cleanup timer
+Timer(60, cleanup_client_locations).start()
 
-    # Verify that the username and password match
-    cursor.execute('''SELECT * FROM users WHERE username=? AND password=?''', (username, hashed_password))
-    result = cursor.fetchone()
-    if result is None:
-        return 'Invalid username or password', 401
-
-    tmp_data = jsonpop['data']
+@app.route('/ping_geo')
+def index():
+    # Determine the client's geo location using the geoip2 library
     client_ip = request.remote_addr
+
     geoinfo = DbIpCity.get(client_ip, api_key='free')
+    client_location= {'latitude': geoinfo.latitude, 'longitude': geoinfo.longitude}
 
-    tmp_data['location'] = {'latitude': geoinfo.latitude, 'longitude': geoinfo.longitude}
+    # Check if there is already an entry for the client's IP in the list
+    for i, entry in enumerate(client_locations):
+        if entry['ip'] == client_ip:
+            # Update the entry with the new location and timestamp
+            client_locations[i] = {
+                'ip': client_ip,
+                'location': client_location,
+                'timestamp': time.time()
+            }
+            break
+    else:
+        # Add a new entry to the list
+        client_locations.append({
+            'ip': client_ip,
+            'location': client_location,
+            'timestamp': time.time()
+        })
 
-    data = str(tmp_data)
+    return 'Client location stored in list!'
 
-    # Connect to the data database
-    data_conn = sqlite3.connect('data.db')
-    data_cursor = data_conn.cursor()
-    
-    # Save the data to the database
-    timestamp = datetime.datetime.now().isoformat()
-    data_cursor.execute('''INSERT INTO data(username, timestamp, data) VALUES(?, ?, ?)''', (username, timestamp, data))
-    data_conn.commit()
+@app.route('/client_locations')
+def get_client_locations():
+    # Format the client locations in the desired format
+    full_list = []
+    for entry in client_locations:
+        latit = entry['location']['latitude']
+        longi = entry['location']['longitude']
+        to_send = {
+            "lat": latit,
+            "lng": longi,
+            "size": 0.1,
+            "color": "white"
+        }
+        full_list.append(to_send)
 
-    return 'OK', 200
+    return jsonify(full_list)
 
-
-
-app.run()
+if __name__ == '__main__':
+    app.run()

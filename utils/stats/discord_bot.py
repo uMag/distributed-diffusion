@@ -1,3 +1,4 @@
+#NOT IN USE
 import discord
 import hashlib
 import sqlite3

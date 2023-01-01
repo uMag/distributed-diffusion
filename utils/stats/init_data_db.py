@@ -1,3 +1,4 @@
+#NOT IN USE
 import sqlite3
 
 # Connect to the database
@@ -8,6 +9,7 @@ cursor = conn.cursor()
 cursor.execute('''
 CREATE TABLE data (
     username TEXT NOT NULL,
+    machine_uuid TEXT NOT NULL,
     timestamp TEXT NOT NULL,
     data TEXT NOT NULL
 )
