@@ -130,14 +130,14 @@ def setuphivemind(conf, log_queue):
     os.makedirs(conf.intern.workingdir)
 
 def pingGeo(server):
-    requests.get('http://' + server + '/api/v1/get/announcelocation')
+    requests.get('https://' + server + '/api/v1/get/announcelocation')
 
 def sendLoss(server, secretpass, currloss):
     import socket
     requests.post(
-        'http://' + server + '/api/v1/private/postloss',
+        'https://' + server + '/api/v1/private/postloss',
          auth=(socket.gethostname(), secretpass),
-         json={"time": time.time, 'loss': currloss}
+         json={"time": time.time(), 'loss': currloss}
          )
 
 
@@ -607,7 +607,7 @@ class DistributedTrainer:
 
                     if self.rank == 0:
                         if self.conf.enablestats:
-                            threading.Thread(target=pingGeo, args=self.conf.stats_ip).start()
+                            threading.Thread(target=pingGeo, args=(self.conf.stats_ip,)).start()
                         progress_bar.update(1)
                         self.global_step += 1
                         currloss = loss.detach().item()
@@ -650,8 +650,6 @@ class DistributedTrainer:
         self.save_checkpoint()
         if self.conf.trainermode == "Relay":
             self.iethread.stop()
-
-        # cleanup()
 
         print(get_gpu_ram())
         print('Done!')
