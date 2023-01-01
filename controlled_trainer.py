@@ -612,7 +612,7 @@ class DistributedTrainer:
                         self.global_step += 1
                         currloss = loss.detach().item()
                         if self.conf.sendloss:
-                            threading.Thread(target=sendLoss, args=(self.conf.stats_ip, self.conf.secretpass, currloss)).start()
+                            threading.Thread(target=sendLoss, args=(self.conf.stats_ip, self.conf.secretpass, currloss,)).start()
                         logs = {
                             "train/loss": currloss,
                             "train/epoch": 1,
