@@ -7,9 +7,9 @@ import requests
 from flask_cors import CORS
 from hivemind.optim.progress_tracker import ProgressTracker
 
-DHT_ADRESS = ""
+DHT_ADRESS = "/ip4/204.15.42.199/tcp/3000/p2p/12D3KooWHAf7qweFdxHP7TidWGxT2LYrW5owFDBCrsFjwEzGBshm"
 RUN_ID = "testrun"
-PASSWORD = ""
+PASSWORD = "WHHgVhHkYmK59jFzP4E4EUSR"
 
 dht = hivemind.DHT(
     initial_peers=[DHT_ADRESS],
@@ -126,7 +126,7 @@ def dhtstats():
     return jsonify(tracker.global_progress)
 
 @app.route('/api/v1/get/lossreports')
-def dhtstats():
+def lossreports():
     return jsonify(lossdata)
 
 if __name__ == '__main__':
