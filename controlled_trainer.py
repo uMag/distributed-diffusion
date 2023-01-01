@@ -597,7 +597,8 @@ class DistributedTrainer:
                     loss = loss  # / world_size
 
                     if self.rank == 0:
-                        threading.Thread(target=pingGeo, args=self.conf.stats_ip).start()
+                        if self.conf.enablestats:
+                            threading.Thread(target=pingGeo, args=self.conf.stats_ip).start()
                         progress_bar.update(1)
                         self.global_step += 1
                         logs = {
