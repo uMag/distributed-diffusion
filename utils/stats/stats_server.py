@@ -1,10 +1,35 @@
 import time
 from threading import Timer
-
+import hivemind
 from flask import Flask, request, jsonify
 from ip2geotools.databases.noncommercial import DbIpCity
 import requests
 from flask_cors import CORS
+from hivemind.optim.progress_tracker import ProgressTracker
+
+DHT_ADRESS = ""
+RUN_ID = "testrun"
+PASSWORD = ""
+
+dht = hivemind.DHT(
+    initial_peers=[DHT_ADRESS],
+    start=True,
+    daemon=True,
+    client_mode=True,
+)
+
+print(dht.num_workers)
+
+tracker = ProgressTracker(
+    dht=dht,
+    prefix=RUN_ID,
+    target_batch_size=75000, #must be the same as peers
+    start=True,
+    daemon=True,
+    min_refresh_period=0.5,
+    max_refresh_period=1.0,
+    default_refresh_period=1
+)
 
 app = Flask(__name__)
 CORS(app)
@@ -27,7 +52,31 @@ def cleanup_client_locations():
 # Start the cleanup timer
 Timer(60, cleanup_client_locations).start()
 
-@app.route('/ping_geo')
+lossdata = {}
+
+@app.route('/api/v1/private/postloss')
+def postloss():
+    # Get the JSON payload
+    json = request.get_json()
+
+    # Get the provided password
+    username = request.authorization.username
+    password = request.authorization.password
+
+    # Verify thepassword
+    if password != PASSWORD:
+        return 'Invalid username or password', 401
+
+    time = json['time']
+    loss = json['loss']
+
+    thisuserentry = lossdata[username]
+    thisuserentry[time] = loss
+
+    return 'Success', 200
+
+
+@app.route('/api/v1/get/announcelocation')
 def index():
     # Determine the client's geo location using the geoip2 library
     client_ip = request.remote_addr
@@ -55,7 +104,7 @@ def index():
 
     return 'Client location stored in list!'
 
-@app.route('/client_locations')
+@app.route('/api/v1/get/peercoords')
 def get_client_locations():
     # Format the client locations in the desired format
     full_list = []
@@ -72,6 +121,14 @@ def get_client_locations():
 
     return jsonify(full_list)
 
+@app.route('/api/v1/get/dhtstats')
+def dhtstats():
+    return jsonify(tracker.global_progress)
+
+@app.route('/api/v1/get/lossreports')
+def dhtstats():
+    return jsonify(lossdata)
+
 if __name__ == '__main__':
-    context = ('fullchain.pem', 'privkey.pem')
-    app.run(host="0.0.0.0", port=8010, ssl_context=context)
+    context = ('/etc/letsencrypt/live/stats.swarm.sail.pe/fullchain.pem', '/etc/letsencrypt/live/stats.swarm.sail.pe/privkey.pem')
+    app.run(host="0.0.0.0", port=443, ssl_context=context)
