@@ -1,3 +1,5 @@
+Note: To use 8Bit inside a docker container, you must use a devel image. Runtime images will only work once, then crash.
+
 # Swarm Diffusion: Decentralized SD Model Training
 Train Stable Diffusion models across the internet with multiple peers
 
