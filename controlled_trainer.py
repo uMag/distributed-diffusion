@@ -196,7 +196,6 @@ def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queu
     )
     out_length = "Store Length: " + str(len(store))
     log_queue.put(str(out_length))
-    print(f'STORE_LEN: {len(store)}')
     log_queue.put("Setting up Dataloader")
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -286,7 +285,6 @@ class DistributedTrainer:
         torch.manual_seed(self.conf.everyone.seed)
         random.seed(self.conf.everyone.seed)
         np.random.seed(self.conf.everyone.seed)
-        print('RANDOM SEED:', self.conf.everyone.seed)
 
         # I think the hf token is set to an empty string, and not None, so we should be ok. thx js
         self.tokenizer = CLIPTokenizer.from_pretrained(self.conf.everyone.model, subfolder='tokenizer',
@@ -325,7 +323,6 @@ class DistributedTrainer:
                 import bitsandbytes as bnb
                 self.optimizer_cls = bnb.optim.AdamW8bit
             except Exception:
-                print('bitsandbytes not supported, using regular Adam optimizer')
                 self.log_queue.put('bitsandbytes not supported, using regular Adam optimizer')
                 self.optimizer_cls = torch.optim.AdamW
         else:
@@ -417,7 +414,7 @@ class DistributedTrainer:
         # Create distributed optimizer
         # from torch.distributed.optim import ZeroRedundancyOptimizer
         # we changed to cls for single gpu training
-        print("Stating standard optimizer")
+        self.log_queue.put("Stating standard optimizer")
         tmp_optimizer = self.optimizer_cls(
             self.optimizer_parameters,
             # optimizer_class=optimizer_cls,
@@ -427,9 +424,9 @@ class DistributedTrainer:
             eps=float(self.conf.everyone.opt_epsilon),
             weight_decay=float(self.conf.everyone.opt_weight_decay),
         )
-        print("Finished standard optimizer")
+        self.log_queue.put("Finished standard optimizer")
 
-        print("Starting hivemind optimizer")
+        self.log_queue.put("Starting hivemind optimizer")
 
         self.optimizer = hivemind.Optimizer(
             dht=self.dht,
@@ -447,13 +444,11 @@ class DistributedTrainer:
             verbose=True,
         )
 
-        print("Finished hivemind optimizer")
+        self.log_queue.put("Finished hivemind optimizer")
 
         self.log_queue.put("Hivemind Optimizer and DHT started successfully!")
 
         if self.conf.trainermode == "Relay":
-            print('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
-            print("Global IP:", hivemind.utils.networking.choose_ip_address(self.dht.get_visible_maddrs()))
             self.log_queue.put(
                 "Direct Hivemind mADDR (DHT only):")
             self.log_queue.put('\n'.join(str(addr) for addr in self.dht.get_visible_maddrs()))
@@ -479,8 +474,6 @@ class DistributedTrainer:
             self.iethread.start()
             self.log_queue.put("IE Server started at: " + str(computer_ip) + ":" + str(self.conf.external_ie))
 
-        print(get_gpu_ram())
-
     def save_checkpoint(self):
         now = datetime.now()
         time_str = now.strftime("%Y-%m-%d-%H-%M-%S")
@@ -500,9 +493,7 @@ class DistributedTrainer:
                 feature_extractor=CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32"),
             )
             self.log_queue.put(f'Saving checkpoint to: {self.conf.intern.workingdir}/{"hivemind"}_{time_str}')
-            print(f'Saving checkpoint to: {self.conf.intern.workingdir}/{"hivemind"}_{time_str}')
             pipeline.save_pretrained(f'{self.conf.intern.workingdir}/{"hivemind"}_{time_str}')
-            print("Checkpoint Saved")
             self.log_queue.put("Checkpoint Saved")
 
             if self.use_ema:
@@ -511,10 +502,10 @@ class DistributedTrainer:
     def train(self):
         # train!
         try:
-            print("Done")
+            if self.optimizer.tracker.global_progress.epoch >= 1:
+                self.log_queue.put("Syncronizing")
+                self.optimizer.load_state_from_peers()
             while True:
-                print(get_gpu_ram())
-                print("Getting chunks")
                 getchunk(self.conf.imageCount, self.conf, self.log_queue)
 
                 # Note: we removed worldsize here
@@ -537,12 +528,10 @@ class DistributedTrainer:
                         command = self.command_queue.get()
                         if command == 'stop':
                             # Start training
-                            print('Stopping training...')
                             self.log_queue.put("Stopping training...")
                             raise StopTrainingException("Recieved Stop Training Command.")
                         elif command == 'save':
                             # Save the model
-                            print('Saving Checkpoint...')
                             self.log_queue.put("Saving Checkpoint...")
                             self.save_checkpoint()
 
@@ -635,14 +624,12 @@ class DistributedTrainer:
                             self.log_queue.put(first_opt_log)
 
         except StopTrainingException as e:
-            print("Stopping Training upon user request")
-            print("TRAINING_STOPPED")
             self.log_queue.put("TRAINING STOPPED")
             if self.conf.trainermode == "Relay":
                 self.iethread.stop()
             pass
         except Exception as e:
-            print(
+            self.log_queue.put(
                 f'Exception caught on rank {self.rank} at step {self.global_step}, saving checkpoint...\n{e}\n{traceback.format_exc()}')
             self._log_debugging()
             pass
@@ -650,10 +637,6 @@ class DistributedTrainer:
         self.save_checkpoint()
         if self.conf.trainermode == "Relay":
             self.iethread.stop()
-
-        print(get_gpu_ram())
-        print('Done!')
-        print("TRAINING_FINISHED")
         self.log_queue.put("TRAINING FINISHED")
         exit()
 
@@ -664,54 +647,38 @@ class DistributedTrainer:
             ip = requests.get("https://api.ipify.org/", timeout=5).text
             return ip
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-            print("Ipfy.org took too long, trying another domain.")
             self.log_queue.put("Ipfy.org took too long, trying another domain.")
         try:
             ip = requests.get("https://ipv4.icanhazip.com/", timeout=5).text
             return ip
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-            print("Icanhazip.com took too long, trying another domain.")
             self.log_queue.put("Icanhazip.com took too long, trying another domain.")
         try:
             tmpjson = json.loads(requests.get("https://jsonip.com/", timeout=5).content)
             ip = tmpjson["ip"]
             return ip
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as err:
-            print("Jsonip.com took too long, ran out of alternatives.")
             self.log_queue.put("Jsonip.com took too long, ran out of alternatives.")
         raise ValueError("Could not get IP online.")
 
     def _log_debugging(self) -> None:
         """Useful logging function"""
         # Inform the user of host, and various versions -- useful for debugging issues.
-        print("RUN_NAME:", "Hivemind Project")
-        print("HOST:", socket.gethostname())
         self.log_queue.put("HOST: " + str(socket.gethostname()))
-        print("CUDA:", torch.version.cuda)
         self.log_queue.put(("CUDA: " + str(torch.version.cuda)))
-        print("TORCH:", torch.__version__)
         self.log_queue.put(("TORCH: " + str(torch.__version__)))
-        print("TRANSFORMERS:", transformers.__version__)
         self.log_queue.put(("TRANSFORMERS: " + str(transformers.__version__)))
-        print("DIFFUSERS:", diffusers.__version__)
-        self.log_queue.put(("DIFFUSERS:" + str(diffusers.__version__)))
-        print("MODEL:", self.conf.everyone.model)
+        self.log_queue.put(("DIFFUSERS: " + str(diffusers.__version__)))
         self.log_queue.put(("MODEL:" + str(self.conf.everyone.model)))
-        print("FP16:", self.conf.everyone.fp16)
-        self.log_queue.put(("FP16:" + str(self.conf.everyone.fp16)))
-        print("RESOLUTION:", self.conf.everyone.resolution)
-        self.log_queue.put(("RESOLUTION:" + str(self.conf.everyone.resolution)))
-        print("DEVICE:", self.device)
+        self.log_queue.put(("FP16: " + str(self.conf.everyone.fp16)))
+        self.log_queue.put(("RESOLUTION: " + str(self.conf.everyone.resolution)))
         self.log_queue.put(("DEVICE: " + str(self.device)))
 
 
 def PyTorchTrainer(command_queue, log_queue):
-    print(type(command_queue), flush=True)
-    print(command_queue, flush=True)
     while True:
         command = command_queue.get()
         if command == 'start':
-            print('Starting Training!')
             # info: we had some issues while passing the conf to the
             # thread, so instead we pickle it here. Please note, that
             # this pickle could include sensitive data such as your
@@ -723,5 +690,4 @@ def PyTorchTrainer(command_queue, log_queue):
             trainer.train()
         elif command == 'stop':
             # kill before it even starts????
-            print('Bye!')
             return
