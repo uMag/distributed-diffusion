@@ -2,34 +2,37 @@ import time
 from threading import Timer
 import hivemind
 from flask import Flask, request, jsonify
-from ip2geotools.databases.noncommercial import DbIpCity
+import geoip2.database
 import requests
 from flask_cors import CORS
 from hivemind.optim.progress_tracker import ProgressTracker
+from datetime import datetime, timedelta
 
-DHT_ADRESS = "/ip4/204.15.42.199/tcp/3000/p2p/12D3KooWHAf7qweFdxHP7TidWGxT2LYrW5owFDBCrsFjwEzGBshm"
+DHT_ADRESS = ""
 RUN_ID = "testrun"
-PASSWORD = "WHHgVhHkYmK59jFzP4E4EUSR"
+PASSWORD = ""
+DISABLE_DHT = False
 
-dht = hivemind.DHT(
-    initial_peers=[DHT_ADRESS],
-    start=True,
-    daemon=True,
-    client_mode=True,
-)
+if not DISABLE_DHT:
+    dht = hivemind.DHT(
+        initial_peers=[DHT_ADRESS],
+        start=True,
+        daemon=True,
+        client_mode=True,
+    )
 
-print(dht.num_workers)
+    print(dht.num_workers)
 
-tracker = ProgressTracker(
-    dht=dht,
-    prefix=RUN_ID,
-    target_batch_size=75000, #must be the same as peers
-    start=True,
-    daemon=True,
-    min_refresh_period=0.5,
-    max_refresh_period=1.0,
-    default_refresh_period=1
-)
+    tracker = ProgressTracker(
+        dht=dht,
+        prefix=RUN_ID,
+        target_batch_size=75000, #must be the same as peers
+        start=True,
+        daemon=True,
+        min_refresh_period=0.5,
+        max_refresh_period=1.0,
+        default_refresh_period=1
+    )
 
 app = Flask(__name__)
 CORS(app)
@@ -52,7 +55,20 @@ def cleanup_client_locations():
 # Start the cleanup timer
 Timer(60, cleanup_client_locations).start()
 
+
 lossdata = {}
+
+def get_user_timeout(username):
+    # Set the default timeout to 30 seconds
+    timeout = 30
+    
+    # Look up the user's timeout, if it exists
+    if username in lossdata:
+        user_data = lossdata[username]
+        if 'timeout' in user_data:
+            timeout = user_data['timeout']
+    
+    return timeout
 
 @app.route('/api/v1/private/postloss')
 def postloss():
@@ -63,16 +79,27 @@ def postloss():
     username = request.authorization.username
     password = request.authorization.password
 
-    # Verify thepassword
+    # Verify the password
     if password != PASSWORD:
         return 'Invalid username or password', 401
 
     time = json['time']
     loss = json['loss']
+    
+    # Check if the user has made a request within the timeout period
+    timeout = get_user_timeout(username)
+    if username in lossdata:
+        user_data = lossdata[username]
+        last_request_time = user_data['time']
+        if (datetime.now() - last_request_time) < timedelta(seconds=timeout):
+            return 'Timeout', 200
 
-    thisuserentry = lossdata[username]
-    thisuserentry[time] = loss
-
+    # Update the loss data for the user
+    if username not in lossdata:
+        lossdata[username] = {}
+    lossdata[username][time] = loss
+    lossdata[username]['time'] = datetime.now()
+    
     return 'Success', 200
 
 
@@ -81,8 +108,13 @@ def index():
     # Determine the client's geo location using the geoip2 library
     client_ip = request.remote_addr
 
-    geoinfo = DbIpCity.get(client_ip, api_key='free')
-    client_location= {'latitude': geoinfo.latitude, 'longitude': geoinfo.longitude}
+    maxmind_db = '/home/ubuntu/distributed-diffusion/utils/stats/db.mmdb'
+    reader = geoip2.database.Reader(maxmind_db)
+    response = reader.city(client_ip)
+    client_location = {
+        'latitude': response.location.latitude,
+        'longitude': response.location.longitude
+    }
 
     # Check if there is already an entry for the client's IP in the list
     for i, entry in enumerate(client_locations):
@@ -121,9 +153,10 @@ def get_client_locations():
 
     return jsonify(full_list)
 
-@app.route('/api/v1/get/dhtstats')
-def dhtstats():
-    return jsonify(tracker.global_progress)
+if not DISABLE_DHT:
+    @app.route('/api/v1/get/dhtstats')
+    def dhtstats():
+        return jsonify(tracker.global_progress)
 
 @app.route('/api/v1/get/lossreports')
 def lossreports():
