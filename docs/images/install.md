@@ -42,6 +42,23 @@ python -m pip install -r requirements.txt
 
 `python3 server.py`
 
+4.- Docker container alternative
+for windows run
+```
+docker run -it -v $PWD/workplace:/distributed-training/workplace -v $PWD/huggingface:/root/.cache/huggingface --gpus=all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p 5080:5080 ghcr.io/chavinlo/distributed-diffusion:latest
+```
+worplace dir - is where images will be temporaly stored and downloaded as well as intermediate wights,
+huggingface dir - is where base models from hf will be cached and stored between launches of docker image
+--ipc=host --ulimit memlock=-1 --ulimit stack=67108864 - magick line to solve some memory issues on win,
+-p 5080:5080 - port mapping for webui 
+
+for linux
+```
+docker run -it -v ./workplace:/distributed-training/workplace -v ./huggingface:/root/.cache/huggingface --gpus=all -p 5080:5080 ghcr.io/chavinlo/distributed-diffusion:latest
+```
+
+you can also have your full path as wellfor workplace and hf cache
+
 An address will pop up, thats the web ui.
 
 additionaly, if you don't have access to the instance network, you can add `-t` to get a cloudflare tunnel link
