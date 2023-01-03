@@ -174,6 +174,16 @@ def download_image(post_id, image_ext, conf):
     tags = tags_response['tags']
     open(f"{conf.intern.tmpdataset}/{post_id}.txt", 'w').write(', '.join(tags))
 
+    if os.path.exists(f"{conf.intern.tmpdataset}/{post_id}.txt") is False or os.path.exists(f"{conf.intern.tmpdataset}/{post_id}.{image_ext}") is False:
+        try:
+            os.remove(f"{conf.intern.tmpdataset}/{post_id}.txt")
+        except Exception:
+            pass
+        try:
+            os.remove(f"{conf.intern.tmpdataset}/{post_id}.{image_ext}")
+        except Exception:
+            pass
+
 
 def dataloader(tokenizer, text_encoder, device, world_size, rank, conf, log_queue):
     # load dataset
